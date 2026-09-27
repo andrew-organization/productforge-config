@@ -260,3 +260,46 @@ def test_rewrites_python_settings_when_hooks_are_listed_in_flow_style(repo: Path
 
     assert "pyproject.toml" in changed
     assert "setup.cfg" in changed
+
+
+def test_moves_a_quoted_action_ref_keeping_its_quotes(repo: Path) -> None:
+    workflow = next((repo / ".github" / "workflows").glob("*.yml"))
+    text = workflow.read_text()
+    quoted = re.sub(r"uses:[ \t]*(andrew-organization/productforge-config/actions/setup@)(\S+)", r'uses: "\1\2"', text)
+    assert quoted != text
+    workflow.write_text(quoted)
+
+    cli.update(repo, VERSION)
+
+    assert f'uses: "andrew-organization/productforge-config/actions/setup@{VERSION}"' in workflow.read_text()
+
+
+def test_updates_a_section_whose_header_carries_a_comment_without_duplicating_it(repo: Path) -> None:
+    pyproject = repo / "pyproject.toml"
+    pyproject.write_text(pyproject.read_text().replace("[tool.black]", "[tool.black]  # the repository's own note", 1))
+
+    cli.update(repo, VERSION)
+
+    assert pyproject.read_text().count("[tool.black]") == 1
+
+
+def test_moves_a_rev_with_a_comment_line_between_it_and_its_repo(repo: Path) -> None:
+    lint = repo / ".pre-commit-lint.yaml"
+    text = lint.read_text()
+    commented = re.sub(
+        r"(repo:[ \t]*https://github.com/andrew-organization/productforge-config[^\n]*\n)", r"\1    # pinned\n", text
+    )
+    assert commented != text
+    lint.write_text(commented)
+
+    cli.update(repo, VERSION)
+
+    assert f"rev: {VERSION}" in lint.read_text()
+
+
+def test_refuses_a_repo_it_takes_hooks_from_but_whose_rev_it_cannot_find(repo: Path) -> None:
+    lint = repo / ".pre-commit-lint.yaml"
+    lint.write_text(re.sub(r"\n[ \t]*rev:[^\n]*", "", lint.read_text(), count=1))
+
+    with pytest.raises(cli.UpdateError):
+        cli.update(repo, VERSION)

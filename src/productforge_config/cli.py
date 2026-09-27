@@ -51,21 +51,31 @@ VERSION_RE = re.compile(r"^v\d+(\.\d+){0,2}(-rc\.\d+)?$")
 # one — always carries all three components.
 _RELEASE_TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)(?:-rc\.(\d+))?$")
 
+# This repository's hook block: its `repo:` line, any blank or comment lines, then `rev:`, the
+# version optionally quoted — the version itself is group 2, so the quotes stay as written.
 _HOOK_REPO_RE = re.compile(
-    r"(^[ \t]*-[ \t]*repo:[ \t]*" + re.escape(HOOK_SOURCE) + r"(?:\.git)?[ \t]*\n" r"[ \t]*rev:[ \t]*)(\S+)",
+    r"(^[ \t]*-[ \t]*repo:[ \t]*['\"]?"
+    + re.escape(HOOK_SOURCE)
+    + r"(?:\.git)?['\"]?[ \t]*(?:#[^\n]*)?\n(?:[ \t]*(?:#[^\n]*)?\n)*[ \t]*rev:[ \t]*['\"]?)([^\s'\"#]+)",
     re.MULTILINE,
 )
 _HOOK_REPO_LINE_RE = re.compile(
-    r"^[ \t]*-[ \t]*repo:[ \t]*" + re.escape(HOOK_SOURCE) + r"(?:\.git)?[ \t]*$",
+    r"^[ \t]*-[ \t]*repo:[ \t]*['\"]?" + re.escape(HOOK_SOURCE) + r"(?:\.git)?['\"]?[ \t]*(?:#[^\n]*)?$",
     re.MULTILINE,
 )
 _ANY_REPO_LINE_RE = re.compile(r"^[ \t]*-[ \t]*repo:", re.MULTILINE)
 # A hook id in either YAML style: a block list item (`- id: black`) or a flow mapping (`{id: black}`).
 _HOOK_ID_RE = re.compile(r"(?:^[ \t]*-[ \t]*|\{[ \t]*)id:[ \t]*([\w.-]+)", re.MULTILINE)
-_ACTION_REF_RE = re.compile(r"(uses:[ \t]*" + re.escape(ACTION_SOURCE) + r"@)(\S+)")
-_SECTION_HEADER_RE = re.compile(r"^\[([^\]]+)\]\s*$")
+# The setup action's ref, the `uses:` value optionally quoted; the ref is group 2, so a closing quote stays.
+_ACTION_REF_RE = re.compile(r"(uses:[ \t]*['\"]?" + re.escape(ACTION_SOURCE) + r"@)([^\s'\"#]+)")
+# A section header, allowing a trailing comment as TOML and INI both do.
+_SECTION_HEADER_RE = re.compile(r"^\[([^\]]+)\]\s*(?:[#;].*)?$")
 _TOML_KEY_RE = re.compile(r'^([A-Za-z0-9_.-]+|"[^"]+")[ \t]*=')
 _INI_KEY_RE = re.compile(r"^([A-Za-z0-9_-]+)[ \t]*=")
+
+
+class UpdateError(ValueError):
+    """A repository that takes this repository's hooks but can't be moved to a release."""
 
 
 class InvalidVersion(ValueError):
@@ -338,6 +348,8 @@ def update_pre_commit_lint(root: Path, version: str) -> bool:
     text = path.read_text()
     new_text, count = _HOOK_REPO_RE.subn(lambda m: m.group(1) + version, text)
     if count == 0:
+        if _HOOK_REPO_LINE_RE.search(text):
+            raise UpdateError(f"{path}: takes this repository's hooks but no rev could be found to move")
         return False
     return _write_if_changed(path, new_text)
 
@@ -444,7 +456,11 @@ def main(argv: list[str] | None = None) -> int:
     except InvalidVersion as exc:
         print(f"productforge-config: {exc}", file=sys.stderr)
         return 1
-    changed = update(root, version)
+    try:
+        changed = update(root, version)
+    except UpdateError as exc:
+        print(f"productforge-config: {exc}", file=sys.stderr)
+        return 1
     if changed:
         print(f"productforge-config {version}: updated {', '.join(changed)}")
     else:
