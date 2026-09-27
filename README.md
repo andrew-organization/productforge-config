@@ -78,20 +78,8 @@ VERSION ?= latest
 
 update-config:
 	@version="$(VERSION)"; \
-	if [ "$$version" = "latest" ]; then \
-	  version=$$(git ls-remote --tags https://github.com/andrew-organization/productforge-config 2>/dev/null \
-	    | sed 's#.*refs/tags/##' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$$' | sort -V | tail -n1); \
-	  if [ -z "$$version" ]; then \
-	    version=$$(git ls-remote --tags https://github.com/andrew-organization/productforge-config 2>/dev/null \
-	      | sed 's#.*refs/tags/##' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$$' | sort -V | tail -n1); \
-	  fi; \
-	  if [ -z "$$version" ]; then \
-	    echo "update-config: couldn't resolve the latest productforge-config release tag" >&2; \
-	    exit 1; \
-	  fi; \
-	fi; \
-	uvx --from git+https://github.com/andrew-organization/productforge-config@$$version \
-	  productforge-config update --version $$version
+	if [ "$$version" = "latest" ]; then version=$$(git ls-remote --tags https://github.com/andrew-organization/productforge-config 2>/dev/null | sed 's#.*refs/tags/##' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$$' | sort -V | tail -n1); [ -n "$$version" ] || version=$$(git ls-remote --tags https://github.com/andrew-organization/productforge-config 2>/dev/null | sed 's#.*refs/tags/##' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$$' | sort -V | tail -n1); [ -n "$$version" ] || { echo "update-config: couldn't resolve the latest productforge-config release tag" >&2; exit 1; }; fi; \
+	uvx --from git+https://github.com/andrew-organization/productforge-config@$$version productforge-config update --version $$version
 ```
 
 `VERSION` defaults to `latest`; the recipe resolves it to a real tag
