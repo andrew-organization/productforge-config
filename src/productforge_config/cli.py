@@ -60,7 +60,8 @@ _HOOK_REPO_LINE_RE = re.compile(
     re.MULTILINE,
 )
 _ANY_REPO_LINE_RE = re.compile(r"^[ \t]*-[ \t]*repo:", re.MULTILINE)
-_HOOK_ID_RE = re.compile(r"^[ \t]*-[ \t]*id:[ \t]*(\S+)", re.MULTILINE)
+# A hook id in either YAML style: a block list item (`- id: black`) or a flow mapping (`{id: black}`).
+_HOOK_ID_RE = re.compile(r"(?:^[ \t]*-[ \t]*|\{[ \t]*)id:[ \t]*([\w.-]+)", re.MULTILINE)
 _ACTION_REF_RE = re.compile(r"(uses:[ \t]*" + re.escape(ACTION_SOURCE) + r"@)(\S+)")
 _SECTION_HEADER_RE = re.compile(r"^\[([^\]]+)\]\s*$")
 _TOML_KEY_RE = re.compile(r'^([A-Za-z0-9_.-]+|"[^"]+")[ \t]*=')

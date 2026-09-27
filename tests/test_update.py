@@ -239,3 +239,24 @@ def test_latest_release_tag_falls_back_to_prerelease_when_no_stable_exists() -> 
     stable, prerelease = cli._parse_release_tags(ls_remote_output)
     assert stable == {}
     assert prerelease[max(prerelease)] == "v1.0.0-rc.2"
+
+
+def test_rewrites_python_settings_when_hooks_are_listed_in_flow_style(repo: Path) -> None:
+    """A repository listing this repository's hooks in flow style, as the
+    README's own example does, still gets its Python settings rewritten.
+    """
+    lint_path = repo / ".pre-commit-lint.yaml"
+    text = lint_path.read_text()
+    ids = cli._shared_hook_ids(repo)
+    assert {"black", "isort", "flake8"} <= ids
+    block = re.search(r"([ \t]*)hooks:\n(?:\1[ \t]*-[ \t]*id:[^\n]*\n(?:\1[ \t]+[^\n-][^\n]*\n)*)+", text)
+    assert block is not None
+    indent = block.group(1)
+    flow = f"{indent}hooks: [" + ", ".join(f"{{id: {i}}}" for i in sorted(ids)) + "]\n"
+    lint_path.write_text(text[: block.start()] + flow + text[block.end() :])
+    assert cli._shared_hook_ids(repo) == ids
+
+    changed = cli.update(repo, VERSION)
+
+    assert "pyproject.toml" in changed
+    assert "setup.cfg" in changed
