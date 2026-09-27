@@ -12,6 +12,7 @@ jobs:
       - uses: andrew-organization/productforge-config/actions/setup@v0.9.0
         with:
           postgres: "true"
+          postgres-db: fixture_repo
 
       - parallel:
           - name: Lint

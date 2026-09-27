@@ -25,6 +25,7 @@ jobs:
       - uses: ./actions/setup
         with:
           postgres: "true"
+          postgres-db: productforge_config_ci
 
       - parallel:
           - name: Lint

@@ -6,20 +6,30 @@ with uvx from the tag being moved to): moves the productforge-config hook
 source's `rev` in .pre-commit-lint.yaml and the
 `productforge-config/actions/setup@...` ref in every .github/workflows/*.yml
 file to that version, and rewrites the shared keys this release carries —
-the markdownlint rules, and the black, isort and flake8 settings — into the
-repository's own local copies. Everything else in those files, including a
-repository's own hooks, ignored paths and excluded paths, is left alone.
+the markdownlint rules, and, only for a repository whose .pre-commit-lint.yaml
+actually takes the corresponding hook, the black, isort and flake8 settings
+— into the repository's own local copies. Everything else in those files,
+including a repository's own hooks, ignored paths and excluded paths, is
+left alone.
+
+`--version` is optional: left unset, or given as "latest", it resolves to
+the newest release tag of this repository (a stable vX.Y.Z, or the newest
+pre-release when no stable release exists yet) via `git ls-remote --tags`
+— the one network call this makes, before anything is written. An explicit
+version is validated against VERSION_RE first, so an invalid one is
+refused rather than half-applied.
 
 Stdlib-only by design: this runs via `uvx --from git+...`, in whatever
 repository the person runs it in, and reads the shared settings bundled
-into this package at build time (see pyproject.toml's force-include) rather
-than fetching anything over the network itself.
+into this package at build time (see pyproject.toml's force-include)
+rather than fetching them over the network itself.
 """
 
 import argparse
 import importlib.resources
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -33,19 +43,140 @@ BLACK_KEYS = ("target-version", "line-length")
 ISORT_KEYS = ("profile", "line_length")
 FLAKE8_KEYS = ("max-line-length", "docstring-convention", "extend-ignore")
 
+# Validates an explicit --version before anything is written: vMAJOR,
+# vMAJOR.MINOR, vMAJOR.MINOR.PATCH, any of those with a -rc.N suffix.
+VERSION_RE = re.compile(r"^v\d+(\.\d+){0,2}(-rc\.\d+)?$")
+
+# A specific release tag — as opposed to a moving `vMAJOR` tag, which isn't
+# one — always carries all three components.
+_RELEASE_TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)(?:-rc\.(\d+))?$")
+
 _HOOK_REPO_RE = re.compile(
     r"(^[ \t]*-[ \t]*repo:[ \t]*" + re.escape(HOOK_SOURCE) + r"(?:\.git)?[ \t]*\n" r"[ \t]*rev:[ \t]*)(\S+)",
     re.MULTILINE,
 )
+_HOOK_REPO_LINE_RE = re.compile(
+    r"^[ \t]*-[ \t]*repo:[ \t]*" + re.escape(HOOK_SOURCE) + r"(?:\.git)?[ \t]*$",
+    re.MULTILINE,
+)
+_ANY_REPO_LINE_RE = re.compile(r"^[ \t]*-[ \t]*repo:", re.MULTILINE)
+_HOOK_ID_RE = re.compile(r"^[ \t]*-[ \t]*id:[ \t]*(\S+)", re.MULTILINE)
 _ACTION_REF_RE = re.compile(r"(uses:[ \t]*" + re.escape(ACTION_SOURCE) + r"@)(\S+)")
 _SECTION_HEADER_RE = re.compile(r"^\[([^\]]+)\]\s*$")
 _TOML_KEY_RE = re.compile(r'^([A-Za-z0-9_.-]+|"[^"]+")[ \t]*=')
 _INI_KEY_RE = re.compile(r"^([A-Za-z0-9_-]+)[ \t]*=")
 
 
+class InvalidVersion(ValueError):
+    """An explicit --version doesn't have a valid productforge-config shape."""
+
+
+def resolve_version(explicit: str | None) -> str:
+    """The version to update to.
+
+    `None` or "latest" resolves to the newest release tag of this
+    repository (a stable vX.Y.Z, or the newest -rc.N when no stable
+    release exists yet). An explicit version is validated against
+    VERSION_RE and returned as-is — before anything is written, so an
+    invalid one is refused rather than half-applied.
+    """
+    if explicit is None or explicit == "latest":
+        return _latest_release_tag()
+    if not VERSION_RE.match(explicit):
+        raise InvalidVersion(
+            f"{explicit!r} isn't a valid productforge-config version — expected "
+            "vMAJOR, vMAJOR.MINOR or vMAJOR.MINOR.PATCH, optionally with a "
+            "-rc.N suffix, e.g. v1.0.0 or v1.0.0-rc.2"
+        )
+    return explicit
+
+
+def _parse_release_tags(
+    ls_remote_output: str,
+) -> tuple[dict[tuple[int, int, int], str], dict[tuple[int, int, int, int], str]]:
+    """Split `git ls-remote --tags` output into stable and pre-release
+    release tags, each keyed by its version tuple for ordering. A moving
+    `vMAJOR` tag, or anything else that isn't a full vX.Y.Z(-rc.N), is
+    ignored — it isn't a release of its own.
+    """
+    stable: dict[tuple[int, int, int], str] = {}
+    prerelease: dict[tuple[int, int, int, int], str] = {}
+    for line in ls_remote_output.splitlines():
+        if "\t" not in line:
+            continue
+        ref = line.split("\t", 1)[1].strip()
+        if not ref.startswith("refs/tags/") or ref.endswith("^{}"):
+            continue
+        tag = ref[len("refs/tags/") :]
+        match = _RELEASE_TAG_RE.match(tag)
+        if not match:
+            continue
+        major, minor, patch, rc = match.groups()
+        version = (int(major), int(minor), int(patch))
+        if rc is None:
+            stable[version] = tag
+        else:
+            prerelease[version + (int(rc),)] = tag
+    return stable, prerelease
+
+
+def _latest_release_tag() -> str:
+    result = subprocess.run(
+        ["git", "ls-remote", "--tags", HOOK_SOURCE],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    stable, prerelease = _parse_release_tags(result.stdout)
+    if stable:
+        return stable[max(stable)]
+    if prerelease:
+        return prerelease[max(prerelease)]
+    raise InvalidVersion(f"no release tags found at {HOOK_SOURCE}")
+
+
+def _shared_hook_ids(root: Path) -> set[str]:
+    """The hook ids a repository actually takes from this repository's own
+    block in its .pre-commit-lint.yaml (empty when the file, or that
+    block, is absent) — so a rewrite only touches settings a repository's
+    hooks actually use.
+    """
+    path = root / ".pre-commit-lint.yaml"
+    if not path.exists():
+        return set()
+    text = path.read_text()
+    match = _HOOK_REPO_LINE_RE.search(text)
+    if match is None:
+        return set()
+    tail = text[match.end() :]
+    next_repo = _ANY_REPO_LINE_RE.search(tail)
+    block = tail[: next_repo.start()] if next_repo else tail
+    return set(_HOOK_ID_RE.findall(block))
+
+
 def _bundled_settings_dir() -> Path:
-    """The settings/ directory this package was built from, at its tag."""
-    return Path(str(importlib.resources.files("productforge_config") / "settings"))
+    """The settings/ directory this package was built from, at its tag.
+
+    A real `uvx --from git+...` install (or `make test`, which forces a
+    non-editable build via UV_NO_EDITABLE) packages settings/ into the
+    wheel — see pyproject.toml's force-include — so importlib.resources
+    finds it there. A plain editable install (`uv sync`'s default, so a
+    bare `uv run pytest` works too) skips that build step and leaves
+    importlib.resources pointing at src/productforge_config itself, which
+    has no settings/ of its own — so this falls back to the repository's
+    real settings/ directory, resolved relative to this source file rather
+    than the current working directory.
+    """
+    packaged = Path(str(importlib.resources.files("productforge_config") / "settings"))
+    if packaged.is_dir():
+        return packaged
+    source_tree = Path(__file__).resolve().parent.parent.parent / "settings"
+    if source_tree.is_dir():
+        return source_tree
+    raise FileNotFoundError(
+        "productforge_config's settings/ directory wasn't found packaged "
+        f"({packaged}) or in the source tree ({source_tree})"
+    )
 
 
 def _load_python_toml() -> dict[str, Any]:
@@ -65,20 +196,42 @@ def _extract_balanced(text: str, key: str) -> tuple[int, int, str]:
 
     `start`/`end` bound the braced value itself (the outer braces
     included), found by counting braces rather than parsing JSON, so a
-    file's comments and any other keys around it are never touched.
+    file's comments and any other keys around it are never touched. The
+    scan is string- and comment-aware: it skips over JSON string literals
+    (respecting backslash escapes) and over // and /* */ comments, so a
+    `}` inside a string value or inside a comment never miscounts the
+    depth.
     """
     marker = re.search(r'"' + re.escape(key) + r'"\s*:\s*', text)
     if marker is None or text[marker.end() :].lstrip()[:1] != "{":
         raise ValueError(f'no "{key}": {{ ... }} block found')
     start = text.index("{", marker.end())
     depth = 0
-    for i in range(start, len(text)):
-        if text[i] == "{":
+    n = len(text)
+    i = start
+    while i < n:
+        ch = text[i]
+        if ch == '"':
+            i += 1
+            while i < n and text[i] != '"':
+                i += 2 if text[i] == "\\" else 1
+            i += 1
+            continue
+        if ch == "/" and i + 1 < n and text[i + 1] == "/":
+            newline = text.find("\n", i)
+            i = n if newline == -1 else newline
+            continue
+        if ch == "/" and i + 1 < n and text[i + 1] == "*":
+            close = text.find("*/", i + 2)
+            i = n if close == -1 else close + 2
+            continue
+        if ch == "{":
             depth += 1
-        elif text[i] == "}":
+        elif ch == "}":
             depth -= 1
             if depth == 0:
                 return start, i + 1, text[start : i + 1]
+        i += 1
     raise ValueError(f'unbalanced "{key}": {{ ... }} block')
 
 
@@ -221,16 +374,25 @@ def update_pyproject(root: Path, python_toml: dict[str, Any]) -> bool:
     path = root / "pyproject.toml"
     if not path.exists():
         return False
+    hook_ids = _shared_hook_ids(root)
     tool = python_toml.get("tool", {})
     text = path.read_text()
-    text = _set_toml_keys(text, "tool.black", {k: tool["black"][k] for k in BLACK_KEYS if k in tool.get("black", {})})
-    text = _set_toml_keys(text, "tool.isort", {k: tool["isort"][k] for k in ISORT_KEYS if k in tool.get("isort", {})})
+    if "black" in hook_ids:
+        text = _set_toml_keys(
+            text, "tool.black", {k: tool["black"][k] for k in BLACK_KEYS if k in tool.get("black", {})}
+        )
+    if "isort" in hook_ids:
+        text = _set_toml_keys(
+            text, "tool.isort", {k: tool["isort"][k] for k in ISORT_KEYS if k in tool.get("isort", {})}
+        )
     return _write_if_changed(path, text)
 
 
 def update_setup_cfg(root: Path, python_toml: dict[str, Any]) -> bool:
     path = root / "setup.cfg"
     if not path.exists():
+        return False
+    if "flake8" not in _shared_hook_ids(root):
         return False
     flake8 = python_toml.get("tool", {}).get("flake8", {})
     text = path.read_text()
@@ -265,8 +427,8 @@ def main(argv: list[str] | None = None) -> int:
     update_parser = subparsers.add_parser("update", help="Bring this repository up to a productforge-config release.")
     update_parser.add_argument(
         "--version",
-        required=True,
-        help="The release to move to, e.g. v1.0.0.",
+        default=None,
+        help="The release to move to, e.g. v1.0.0 (default, or 'latest': the newest release tag).",
     )
     update_parser.add_argument(
         "--path",
@@ -276,11 +438,16 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     root = Path(args.path).resolve()
-    changed = update(root, args.version)
+    try:
+        version = resolve_version(args.version)
+    except InvalidVersion as exc:
+        print(f"productforge-config: {exc}", file=sys.stderr)
+        return 1
+    changed = update(root, version)
     if changed:
-        print(f"productforge-config {args.version}: updated {', '.join(changed)}")
+        print(f"productforge-config {version}: updated {', '.join(changed)}")
     else:
-        print(f"productforge-config {args.version}: already up to date")
+        print(f"productforge-config {version}: already up to date")
     return 0
 
 

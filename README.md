@@ -23,23 +23,33 @@ brought up to a release by one command, run in it.
 
 ## Bringing a repository up to a release
 
-Run in the repository, typically through its own `make update-config`:
+Run in the repository, typically through its own `make update-config`
+(`VERSION` optional — see below):
 
 ```sh
 uvx --from git+https://github.com/andrew-organization/productforge-config@v1.0.0 \
   productforge-config update --version v1.0.0
 ```
 
+`--version` is optional: left unset, or given as `latest`, it resolves to
+the newest release tag of this repository — a stable `vX.Y.Z`, or the
+newest `-rc.N` when no stable release exists yet. An explicit version is
+validated (`vMAJOR`, `vMAJOR.MINOR`, `vMAJOR.MINOR.PATCH`, any of those
+with a `-rc.N` suffix) before anything is written, and refused with a
+clear message otherwise.
+
 It moves the productforge-config hook source's `rev` in
 `.pre-commit-lint.yaml` and the
 `andrew-organization/productforge-config/actions/setup@...` ref in every
 `.github/workflows/*.yml` file to that version, and rewrites the shared
 keys this release carries into the repository's own local copies
-(`.markdownlint-cli2.jsonc`'s `"config"`; `pyproject.toml`'s
-`[tool.black]`/`[tool.isort]`; `setup.cfg`'s `[flake8]`) — leaving a
-repository's own hooks, ignored paths and excluded paths exactly as they
-were. Commit the result and raise it as an ordinary pull request; nothing
-here opens that pull request for you.
+(`.markdownlint-cli2.jsonc`'s `"config"`; and, only for a hook the
+repository actually takes from this repository's own block in
+`.pre-commit-lint.yaml`, `pyproject.toml`'s `[tool.black]`/`[tool.isort]`
+and `setup.cfg`'s `[flake8]`) — leaving a repository's own hooks, ignored
+paths and excluded paths exactly as they were. Commit the result and raise
+it as an ordinary pull request; nothing here opens that pull request for
+you.
 
 ## A repository's own side
 
@@ -57,16 +67,38 @@ repos:
 # .github/workflows/ci.yml, after actions/checkout
 - uses: andrew-organization/productforge-config/actions/setup@v1.0.0
   with:
-    flutter: "true"   # reads the repository's own .fvmrc
-    postgres: "true"  # starts postgres:18-alpine as a background container
+    flutter: "true"        # reads the repository's own .fvmrc
+    postgres: "true"       # starts postgres:18-alpine as a background container
+    postgres-db: "my_app"  # required when postgres is "true" — no shared default
 ```
 
 ```makefile
 # Makefile
+VERSION ?= latest
+
 update-config:
-	uvx --from git+https://github.com/andrew-organization/productforge-config@$(VERSION) \
-	  productforge-config update --version $(VERSION)
+	@version="$(VERSION)"; \
+	if [ "$$version" = "latest" ]; then \
+	  version=$$(git ls-remote --tags https://github.com/andrew-organization/productforge-config 2>/dev/null \
+	    | sed 's#.*refs/tags/##' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$$' | sort -V | tail -n1); \
+	  if [ -z "$$version" ]; then \
+	    version=$$(git ls-remote --tags https://github.com/andrew-organization/productforge-config 2>/dev/null \
+	      | sed 's#.*refs/tags/##' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$$' | sort -V | tail -n1); \
+	  fi; \
+	  if [ -z "$$version" ]; then \
+	    echo "update-config: couldn't resolve the latest productforge-config release tag" >&2; \
+	    exit 1; \
+	  fi; \
+	fi; \
+	uvx --from git+https://github.com/andrew-organization/productforge-config@$$version \
+	  productforge-config update --version $$version
 ```
+
+`VERSION` defaults to `latest`; the recipe resolves it to a real tag
+before it ever reaches `uvx` — `git+...@latest` isn't a ref `uvx` can
+fetch, so an empty or unresolved ref is refused rather than passed
+through. Pass an explicit tag to pin one: `make update-config
+VERSION=v1.0.0`.
 
 ## Developing this repository
 
