@@ -21,9 +21,13 @@ inputs:
 runs:
   using: composite
   steps:
-    # Started first and in the background, so the database boots while
-    # everything else installs; only a repository's own integration tests
-    # wait for it. The env matches productforge-api-template's own CI today.
+    # `docker run -d` itself detaches, so this step returns immediately and
+    # the database boots while everything else installs; only a
+    # repository's own integration tests wait for it. A composite action's
+    # own steps don't support the job-level `background:` key the four
+    # repositories' ci.yml files use for this same command — `-d` already
+    # gives the same effect. The env matches productforge-api-template's
+    # own CI today.
     - name: Start Postgres
       if: inputs.postgres == 'true'
       shell: bash
@@ -31,7 +35,6 @@ runs:
         docker run -d --name postgres -p 5432:5432
         -e POSTGRES_DB=the_stack_api -e POSTGRES_USER=dev -e POSTGRES_PASSWORD=dev
         postgres:18-alpine
-      background: true
 
     - name: Set up Flutter
       if: inputs.flutter == 'true'
