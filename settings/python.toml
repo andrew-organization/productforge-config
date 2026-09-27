@@ -1,0 +1,18 @@
+# The Python lint and format settings every ProductForge repository shares.
+# `make update-config` rewrites these exact keys into a repository's own
+# pyproject.toml ([tool.black], [tool.isort]) and setup.cfg ([flake8]),
+# leaving every other key there — a repository's own excluded paths among
+# them — untouched.
+
+[tool.black]
+target-version = ["py314"]
+line-length = 120
+
+[tool.isort]
+profile = "black"
+line_length = 120
+
+[tool.flake8]
+max-line-length = 120
+docstring-convention = "google"
+extend-ignore = "D100,D101,D102,D103,D104,D105,D106,D107,D200,D202,D205,D212,D415,E203,W503"

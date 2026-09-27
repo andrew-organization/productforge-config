@@ -1,0 +1,9 @@
+// Fixture — a stale config plus a repo-own "ignores" key, to prove the
+// update command replaces the former and leaves the latter alone.
+{
+  "config": {
+    "default": false,
+    "MD001": true
+  },
+  "ignores": ["CHANGELOG.md"]
+}

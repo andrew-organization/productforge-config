@@ -1,0 +1,58 @@
+name: Set up
+description: >-
+  The CI setup every ProductForge repository repeats: uv with Python 3.14
+  and its cache, the pre-commit cache keyed on the caller's own hook files,
+  and make install — with Flutter and Postgres as options. Run this after
+  actions/checkout; a repository's own parallel checks follow it.
+
+inputs:
+  flutter:
+    description: >-
+      Set up Flutter from the caller's own .fvmrc before installing.
+    required: false
+    default: "false"
+  postgres:
+    description: >-
+      Start postgres:18-alpine as a background container before installing,
+      for a repository whose own checks wait on it.
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    # Started first and in the background, so the database boots while
+    # everything else installs; only a repository's own integration tests
+    # wait for it. The env matches productforge-api-template's own CI today.
+    - name: Start Postgres
+      if: inputs.postgres == 'true'
+      shell: bash
+      run: >-
+        docker run -d --name postgres -p 5432:5432
+        -e POSTGRES_DB=the_stack_api -e POSTGRES_USER=dev -e POSTGRES_PASSWORD=dev
+        postgres:18-alpine
+      background: true
+
+    - name: Set up Flutter
+      if: inputs.flutter == 'true'
+      uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+      with:
+        flutter-version-file: .fvmrc
+        cache: true
+
+    - name: Set up uv
+      uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      with:
+        python-version: "3.14"
+        enable-cache: true
+        prune-cache: true
+
+    - name: Cache pre-commit environments
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/pre-commit
+        key: pre-commit-${{ hashFiles('.pre-commit-config.yaml', '.pre-commit-lint.yaml') }}
+
+    - name: Install dependencies
+      shell: bash
+      run: make install

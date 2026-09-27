@@ -1,0 +1,16 @@
+[project]
+name = "fixture-repo"
+version = "0.1.0"
+requires-python = ">=3.14,<4.0"
+
+[tool.black]
+target-version = ["py312"]
+line-length = 88
+
+[tool.isort]
+profile = "black"
+line_length = 88
+skip_glob = ["*/migrations/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
