@@ -194,3 +194,40 @@ def test_apply_returns_0_from_main(gh_state) -> None:
         rulesets=[],
     )
     assert cli.main(["github", "apply", "--repo", REPO]) == 0
+
+
+def _with_github_defaults(ruleset: dict) -> dict:
+    """The ruleset as GitHub returns it once saved: each rule's parameters
+    filled in with fields settings/github.json doesn't state.
+    """
+    saved = json.loads(json.dumps(ruleset))
+    for rule in saved.get("rules", []):
+        rule.setdefault("parameters", {}).update(
+            {"required_reviewers": [], "dismissal_restriction": {"enabled": False, "allowed_actors": []}}
+        )
+    return saved
+
+
+def test_check_accepts_the_defaults_github_adds_to_a_saved_ruleset(gh_state) -> None:
+    ruleset = _with_github_defaults(SETTINGS["ruleset_public_only"])
+    ruleset["id"] = 1
+    gh_state.seed(
+        repo={"private": False, **SETTINGS["repository"]},
+        workflow_permissions=dict(SETTINGS["actions_workflow_permissions"]),
+        rulesets=[ruleset],
+    )
+
+    assert github.check(REPO) == []
+
+
+def test_check_still_reports_a_ruleset_value_that_differs(gh_state) -> None:
+    ruleset = _with_github_defaults(SETTINGS["ruleset_public_only"])
+    ruleset["id"] = 1
+    ruleset["enforcement"] = "disabled"
+    gh_state.seed(
+        repo={"private": False, **SETTINGS["repository"]},
+        workflow_permissions=dict(SETTINGS["actions_workflow_permissions"]),
+        rulesets=[ruleset],
+    )
+
+    assert any(".enforcement" in line for line in github.check(REPO))
