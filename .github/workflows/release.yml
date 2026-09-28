@@ -1,0 +1,56 @@
+name: Release
+
+# Runs after a pull request lands on the default branch — never at pull
+# request time. The squashed commit's subject is the pull request title
+# (the repository sets squash_merge_commit_title to PR_TITLE, so this holds
+# for every merge), and its Conventional Commits type is what decides the
+# next version.
+on:
+  push:
+    branches:
+      - main
+
+# Serialises overlapping runs rather than letting them race: two pull
+# requests merging close together would otherwise have two runs computing a
+# next version against the same branch at once, and the slower one would
+# overwrite the faster one's bump.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    # A release here is a git tag and its GitHub release, and nothing else:
+    # no file in the tree carries the version, so the job pushes no commit.
+
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444  # v5.0.0
+        with:
+          node-version: 22
+
+      - name: Install semantic-release
+        run: npm install --no-save semantic-release@24 conventional-changelog-conventionalcommits@8
+
+      - name: Release
+        run: npx semantic-release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # semantic-release exits successfully when it finds nothing to
+      # release, which includes a run that left a tag without the rest of
+      # its release. This fails the job instead of leaving that silent.
+      - name: Check the release is complete
+        run: ./scripts/check-release.sh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
