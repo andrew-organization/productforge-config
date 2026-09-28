@@ -366,6 +366,16 @@ def update_markdownlint(root: Path) -> bool:
     return _write_if_changed(path, text[:start] + shared + text[end:])
 
 
+def update_yamllint(root: Path) -> bool:
+    """Writes the shared YAML lint settings whole as the repository's own
+    .yamllint, wherever it takes the yamllint hook from this repository.
+    """
+    if "yamllint" not in _shared_hook_ids(root):
+        return False
+    shared = (_bundled_settings_dir() / "yamllint.yaml").read_text()
+    return _write_if_changed(root / ".yamllint", shared)
+
+
 def update_pyproject(root: Path, python_toml: dict[str, Any]) -> bool:
     path = root / "pyproject.toml"
     if not path.exists():
@@ -409,6 +419,8 @@ def update(root: Path, version: str) -> list[str]:
         changed.append(".github/workflows/*.yml")
     if update_markdownlint(root):
         changed.append(".markdownlint-cli2.jsonc")
+    if update_yamllint(root):
+        changed.append(".yamllint")
     if update_pyproject(root, python_toml):
         changed.append("pyproject.toml")
     if update_setup_cfg(root, python_toml):
