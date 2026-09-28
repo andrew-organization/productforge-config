@@ -1,0 +1,129 @@
+name: Release
+
+# The release every ProductForge repository shares. A repository calls it
+# from its own release workflow, on a push to main:
+#
+#   jobs:
+#     release:
+#       uses: andrew-organization/productforge-config/.github/workflows/release.yml@vX.Y.Z
+#       permissions: {contents: write, issues: write, pull-requests: write}
+#
+# and this repository runs it on its own pushes to main. The squashed
+# commit's subject is the pull request title, and its Conventional Commits
+# type decides the next version: feat a minor, fix, perf, refactor and
+# build(deps) a patch, a "!" or BREAKING CHANGE footer a major, anything else
+# nothing. A release is a git tag and its GitHub release; a repository that
+# also carries its version in a file writes and commits it through
+# prepare-cmd, before the tag is made.
+on:
+  push:
+    branches:
+      - main
+  workflow_call:
+    inputs:
+      prepare-cmd:
+        description: >-
+          Run after the next version is known and before it's tagged, with
+          semantic-release's ${nextRelease.version} available — for a
+          repository whose own files carry the version. Empty by default.
+        type: string
+        default: ""
+      check-cmd:
+        description: >-
+          Run after the release, as a further check a repository adds of its
+          own (for instance that a file's version matches the new tag).
+          Empty by default.
+        type: string
+        default: ""
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    # Serialises overlapping runs rather than letting them race: two pull
+    # requests merging close together would otherwise compute a next
+    # version against the same branch at once.
+    concurrency:
+      group: release-${{ github.repository }}
+      cancel-in-progress: false
+
+    # A commit this job wrote (a repository's own version commit, through
+    # prepare-cmd) must not start another release. Its "chore(release):"
+    # type releases nothing, and "[skip ci]" in its subject runs no workflow
+    # at all; this condition is the third guard.
+    if: ${{ !startsWith(github.event.head_commit.message, 'chore(release):') }}
+
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444  # v5.0.0
+        with:
+          node-version: 22
+
+      - name: Install semantic-release
+        run: npm install --no-save semantic-release@24 @semantic-release/exec@7 conventional-changelog-conventionalcommits@8
+
+      # The configuration lives here rather than in each repository, so every
+      # repository releases by the same rules. It's written into the checkout
+      # but excluded from git, so it never shows as a change.
+      - name: Write the release configuration
+        env:
+          PREPARE_CMD: ${{ inputs.prepare-cmd }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          plugins = [
+              ["@semantic-release/commit-analyzer", {
+                  "preset": "conventionalcommits",
+                  "releaseRules": [
+                      {"type": "refactor", "release": "patch"},
+                      {"type": "build", "scope": "deps", "release": "patch"},
+                  ],
+              }],
+              ["@semantic-release/release-notes-generator", {"preset": "conventionalcommits"}],
+          ]
+          if os.environ["PREPARE_CMD"]:
+              plugins.append(["@semantic-release/exec", {"prepareCmd": os.environ["PREPARE_CMD"]}])
+          plugins.append(["@semantic-release/github", {
+              "successComment": False, "failComment": False, "labels": False, "releasedLabels": False,
+          }])
+          with open(".releaserc.json", "w") as f:
+              json.dump({"branches": ["main"], "plugins": plugins}, f, indent=2)
+          PY
+          echo ".releaserc.json" >> .git/info/exclude
+
+      - name: Release
+        run: npx semantic-release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # semantic-release exits successfully when it finds nothing to
+      # release, including when a failed run left a tag behind without its
+      # GitHub release. This turns that silent success into a failure.
+      - name: Check the release is complete
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git fetch --quiet --tags origin "${GITHUB_REF_NAME}"
+          latest="$(git describe --tags --abbrev=0 --match 'v[0-9]*.[0-9]*.[0-9]*' --exclude '*-*' "origin/${GITHUB_REF_NAME}" 2>/dev/null || true)"
+          if [ -z "${latest}" ]; then
+            echo "no release tag on ${GITHUB_REF_NAME} yet"
+            exit 0
+          fi
+          gh release view "${latest}" > /dev/null || {
+            echo "::error::no GitHub release exists for ${latest}"
+            exit 1
+          }
+
+      - name: Run the repository's own check
+        if: ${{ inputs.check-cmd != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ${{ inputs.check-cmd }}

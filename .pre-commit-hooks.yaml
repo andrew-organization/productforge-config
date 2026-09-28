@@ -1,0 +1,70 @@
+# The lint hooks every ProductForge repository shares, each pinned to its
+# tool's own version so a consuming repository lists one hook source at one
+# tag instead of several. A repository's own hooks (its extra checks, its
+# ignored and excluded paths) stay in its own copy — see settings/ for the
+# shared lint and format settings that go with these.
+#
+# additional_dependencies given here are the ones every consumer needs
+# (flake8's docstring plugins); a consumer can still add its own on top
+# where a hook is referenced, exactly as with any other pre-commit hook
+# source.
+
+- id: trailing-whitespace
+  name: trailing whitespace
+  description: Trims trailing whitespace.
+  entry: trailing-whitespace-fixer
+  language: python
+  additional_dependencies: ["pre-commit-hooks==6.0.0"]
+  types: [text]
+
+- id: end-of-file-fixer
+  name: fix end of files
+  description: Ensures a file ends in a single newline.
+  entry: end-of-file-fixer
+  language: python
+  additional_dependencies: ["pre-commit-hooks==6.0.0"]
+  types: [text]
+
+- id: markdownlint
+  name: markdownlint
+  description: Lints and auto-fixes Markdown.
+  entry: markdownlint-cli2
+  language: node
+  additional_dependencies: ["markdownlint-cli2@0.22.1"]
+  types: [markdown]
+
+- id: pyupgrade
+  name: pyupgrade
+  description: Upgrades Python syntax to the target version.
+  entry: pyupgrade
+  language: python
+  additional_dependencies: ["pyupgrade==3.21.2"]
+  types: [python]
+  args: ["--py314-plus"]
+
+- id: isort
+  name: isort
+  description: Sorts and formats Python imports.
+  entry: isort
+  language: python
+  additional_dependencies: ["isort==5.10.1"]
+  types: [python]
+
+- id: black
+  name: black
+  description: Formats Python.
+  entry: black
+  language: python
+  additional_dependencies: ["black==26.3.1"]
+  types_or: [python, pyi]
+
+- id: flake8
+  name: flake8
+  description: Lints Python, including docstrings.
+  entry: flake8
+  language: python
+  additional_dependencies:
+    - flake8==7.3.0
+    - flake8-docstrings>=1.7
+    - pydocstyle>=6.3
+  types: [python]

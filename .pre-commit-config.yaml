@@ -1,0 +1,13 @@
+# The git hook runs this project's make targets on every commit; the Makefile documents each one.
+default_stages: [pre-commit]
+fail_fast: false
+
+repos:
+  - repo: local
+    hooks:
+      - id: lint
+        name: make lint
+        entry: make lint
+        language: system
+        pass_filenames: false
+        always_run: true

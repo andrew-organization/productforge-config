@@ -1,0 +1,31 @@
+// The markdown lint rules every ProductForge repository shares — kept in
+// sync in a repository's own .markdownlint-cli2.jsonc by `make
+// update-config`. A repository's own ignored paths, if it has any, live
+// alongside this in that same local copy and are left untouched.
+//
+// - MD001/MD025: consistent heading structure (one H1 per file, no
+//   skipped levels).
+// - MD024 uses siblings_only: repeated subheadings under different
+//   parent sections are fine; duplicate headings at the same level
+//   within one file are not.
+// - MD060 uses compact table style (`| --- |`, not padded dashes).
+{
+  "config": {
+    "default": false,
+    "MD001": true,
+    "MD009": true,
+    "MD012": true,
+    "MD019": true,
+    "MD022": true,
+    "MD024": { "siblings_only": true },
+    "MD025": true,
+    "MD031": true,
+    "MD032": true,
+    "MD033": true,
+    "MD034": true,
+    "MD036": true,
+    "MD040": true,
+    "MD047": true,
+    "MD060": { "style": "compact" }
+  }
+}

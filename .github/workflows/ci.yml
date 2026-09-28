@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  # Every pull request, whatever it targets, so a PR stacked on another
+  # gets the same checks as one targeting main.
+  pull_request:
+
+# A new push to a pull request cancels the run it supersedes.
+concurrency:
+  group: ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  # One job, set up once, then every check in parallel on the same runner —
+  # the same shape as every repository that takes this one's release. The
+  # setup step here is this repository's own action, run against this
+  # repository's own checkout: the same dogfooding that proves it works for
+  # everyone else, with postgres:true so that branch runs too.
+  ci:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: ./actions/setup
+        with:
+          postgres: "true"
+          postgres-db: productforge_config_ci
+
+      - parallel:
+          - name: Lint
+            run: make lint
+
+          - name: Test
+            run: make test
