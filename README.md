@@ -9,16 +9,24 @@ command, run in it.
 
 ## What it holds
 
-- `.pre-commit-hooks.yaml` — the lint hooks every repository shares
-  (`trailing-whitespace`, `end-of-file-fixer`, `markdownlint`, `pyupgrade`,
-  `isort`, `black`, `flake8`), each pinned to its tool's own version.
+- `.pre-commit-hooks.yaml` — the lint hooks every repository shares, each
+  pinned to its tool's own version: `trailing-whitespace`,
+  `end-of-file-fixer`, `check-json`, `markdownlint`, `yamllint`,
+  `shellcheck`, `taplo-format`, `taplo-lint` and `checkmake` for any
+  repository; `pyupgrade`, `isort`, `black` and `flake8` for Python; and
+  `dart-format` and `flutter-analyze` for a Flutter app, run through its own
+  Flutter. A repository takes the ones for the files it has.
 - `actions/setup/action.yml` — the CI setup every repository repeats: uv
   with Python 3.14 and its cache, the pre-commit cache keyed on the
   caller's own hook files, and `make install` — with Flutter and Postgres
   as options (`flutter: true`, `postgres: true`).
-- `settings/markdownlint.jsonc`, `settings/python.toml` — the markdownlint
-  rules and the black, isort and flake8 settings every repository keeps a
-  real local copy of, so editors read them.
+- `settings/markdownlint.jsonc`, `settings/yamllint.yaml`,
+  `settings/python.toml` — the markdownlint and yamllint rules and the
+  black, isort and flake8 settings. `update` writes them into each
+  repository that takes the matching hook, as a real local copy, so editors
+  read the same rules; a change here reaches every repository on its next
+  update.
+- `go.mod` — only so pre-commit can install the golang `checkmake` hook.
 - `src/productforge_config/` — the `productforge-config update` command
   that brings a repository up to a release.
 
@@ -60,6 +68,7 @@ repos:
   - repo: https://github.com/andrew-organization/productforge-config
     rev: v1.0.0
     hooks: [{id: trailing-whitespace}, {id: end-of-file-fixer}, {id: markdownlint},
+            {id: yamllint}, {id: checkmake},
             {id: pyupgrade}, {id: isort}, {id: black}, {id: flake8}]   # the hooks it needs
   # then the repository's own hooks, unchanged
 ```
