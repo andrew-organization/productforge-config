@@ -3,6 +3,7 @@ against a small fixture file — proving the hook manifest here is valid and
 actually runs the tool it wraps, not just that update() edits text right.
 """
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -79,3 +80,65 @@ def test_shellcheck_hook_runs(tmp_path: Path) -> None:
 
     assert result.returncode != 0
     assert "SC2086" in result.stdout
+
+
+def _without_ci() -> dict[str, str]:
+    return {k: v for k, v in os.environ.items() if k not in ("CI", "GIT_INDEX_FILE")}
+
+
+def test_end_of_file_fixer_fails_outside_a_commit(tmp_path: Path) -> None:
+    target = tmp_path / "no_newline.json"
+    target.write_text("{}")
+
+    result = subprocess.run(
+        [sys.executable, "-m", "pre_commit", "try-repo", str(REPO_ROOT), "end-of-file-fixer", "--files", str(target)],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        env=_without_ci(),
+    )
+
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert target.read_text() == "{}\n"
+
+
+def test_end_of_file_fixer_stages_its_fix_inside_a_commit(tmp_path: Path) -> None:
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    target = tmp_path / "no_newline.json"
+    target.write_text("{}")
+    subprocess.run(["git", "add", "no_newline.json"], cwd=tmp_path, check=True)
+    # git hands every commit hook the index it's committing, as GIT_INDEX_FILE.
+    env = _without_ci() | {"GIT_INDEX_FILE": str(tmp_path / ".git" / "index")}
+
+    result = subprocess.run(
+        # Called directly: try-repo builds its own throwaway repository with git, which a
+        # GIT_INDEX_FILE pointing elsewhere would break. The manifest is proven above.
+        [sys.executable, "-m", "productforge_config.final_newline", "no_newline.json"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    staged = subprocess.run(["git", "show", ":no_newline.json"], cwd=tmp_path, capture_output=True, text=True)
+    assert staged.stdout == "{}\n"
+
+
+def test_end_of_file_fixer_still_fails_inside_a_commit_in_ci(tmp_path: Path) -> None:
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    (tmp_path / "no_newline.json").write_text("{}")
+    subprocess.run(["git", "add", "no_newline.json"], cwd=tmp_path, check=True)
+    env = _without_ci() | {"GIT_INDEX_FILE": str(tmp_path / ".git" / "index"), "CI": "true"}
+
+    result = subprocess.run(
+        # Called directly: try-repo builds its own throwaway repository with git, which a
+        # GIT_INDEX_FILE pointing elsewhere would break. The manifest is proven above.
+        [sys.executable, "-m", "productforge_config.final_newline", "no_newline.json"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert result.returncode != 0, result.stdout + result.stderr

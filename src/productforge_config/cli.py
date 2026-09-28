@@ -391,6 +391,17 @@ def update_yamllint(root: Path) -> bool:
     return _write_if_changed(root / ".yamllint", shared)
 
 
+def update_editorconfig(root: Path) -> bool:
+    """Writes the shared editor settings whole as the repository's own
+    .editorconfig, wherever it takes the end-of-file-fixer or
+    trailing-whitespace hook from this repository.
+    """
+    if not {"end-of-file-fixer", "trailing-whitespace"} & _shared_hook_ids(root):
+        return False
+    shared = (_bundled_settings_dir() / "editorconfig").read_text()
+    return _write_if_changed(root / ".editorconfig", shared)
+
+
 def update_pyproject(root: Path, python_toml: dict[str, Any]) -> bool:
     path = root / "pyproject.toml"
     if not path.exists():
@@ -436,6 +447,8 @@ def update(root: Path, version: str) -> list[str]:
         changed.append(".markdownlint-cli2.jsonc")
     if update_yamllint(root):
         changed.append(".yamllint")
+    if update_editorconfig(root):
+        changed.append(".editorconfig")
     if update_pyproject(root, python_toml):
         changed.append("pyproject.toml")
     if update_setup_cfg(root, python_toml):
