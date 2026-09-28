@@ -18,8 +18,13 @@ brought up to a release by one command, run in it.
 - `settings/markdownlint.jsonc`, `settings/python.toml` — the markdownlint
   rules and the black, isort and flake8 settings every repository keeps a
   real local copy of, so editors read them.
+- `settings/github.json` — the GitHub repository settings every
+  ProductForge repository shares, checked and applied by
+  `productforge-config github` rather than kept as a local copy (see
+  below).
 - `src/productforge_config/` — the `productforge-config update` command
-  that brings a repository up to a release.
+  that brings a repository up to a release, and the `productforge-config
+  github` command that checks or applies `settings/github.json`.
 
 ## Bringing a repository up to a release
 
@@ -87,6 +92,83 @@ before it ever reaches `uvx` — `git+...@latest` isn't a ref `uvx` can
 fetch, so an empty or unresolved ref is refused rather than passed
 through. Pass an explicit tag to pin one: `make update-config
 VERSION=v1.0.0`.
+
+## Checking and applying a repository's GitHub settings
+
+`settings/github.json` holds the GitHub repository settings every
+ProductForge repository shares — not a repository's own local copy, but
+the live GitHub-side configuration itself. Each value is proposed for
+review before it's ever applied to a real repository:
+
+- **Merge methods**: squash only (`allow_squash_merge`, with
+  `allow_merge_commit` and `allow_rebase_merge` both false) — one commit
+  per pull request on the target branch, so history reads as a list of
+  changes rather than a list of individual commits plus their merges.
+  `squash_merge_commit_title: PR_TITLE` and
+  `squash_merge_commit_message: PR_BODY` make that squash commit's
+  message the pull request's own title and body, rather than GitHub's
+  default concatenation of every commit on the branch.
+- **`delete_branch_on_merge: true`** — a merged branch is done; nothing
+  needs it left behind.
+- **`allow_update_branch: true`** — offers the one-click "Update branch"
+  button on a pull request behind its target, without requiring it.
+- **`allow_auto_merge: false`** — a merge is a deliberate action, not
+  something queued to happen unattended.
+- **`has_issues`, `has_projects`, `has_wiki`, `has_discussions`: all
+  false** — none of these are where ProductForge tracks work or
+  discussion; leaving them on invites drift to a second, unmaintained
+  home for both.
+- **`web_commit_signoff_required: false`** — this org doesn't require
+  sign-off on GitHub's own web-based commits.
+- **Actions workflow permissions default to read**
+  (`default_workflow_permissions: read`,
+  `can_approve_pull_request_reviews: false`) — a workflow's `GITHUB_TOKEN`
+  can read a repository by default but not write to it or approve pull
+  requests; a workflow that genuinely needs to write asks for that
+  permission explicitly in its own YAML instead of relying on a broad
+  repository default.
+- **For public repositories only**, a ruleset requiring a pull request to
+  change `main` (no direct pushes) — skipped for a private repository,
+  because branch rules aren't available on this organisation's GitHub
+  Free plan.
+
+### Checking
+
+```sh
+uvx --from git+https://github.com/andrew-organization/productforge-config@v1.0.0 \
+  productforge-config github check --repo andrew-organization/some-repo
+```
+
+Prints one line for each setting whose live value differs from
+`settings/github.json` (or nothing, when the repository already matches).
+Exits `1` if anything differs, `0` if nothing does. Entirely read-only —
+`check` never calls a `gh api` write.
+
+### Applying
+
+```sh
+uvx --from git+https://github.com/andrew-organization/productforge-config@v1.0.0 \
+  productforge-config github apply --repo andrew-organization/some-repo
+```
+
+Applies `settings/github.json` to the named repository: `gh api -X PATCH
+repos/<repo>` for the repository fields, `gh api -X PUT
+repos/<repo>/actions/permissions/workflow` for the Actions default
+workflow permissions, and — only when the repository is public — the
+branch ruleset, created if it doesn't exist yet or updated in place by
+name if it does. Idempotent: every call sends the file's full values, so
+running it again once a repository already matches changes nothing
+further.
+
+**Applying needs repository admin rights** on the target — the same
+rights `gh` itself needs to change these settings — and changes a real
+repository's configuration immediately, with no further confirmation.
+Review the proposed values above (and `settings/github.json` itself)
+before running it against any repository.
+
+Both commands need `gh` installed and authenticated (`gh auth status`)
+with access to the target repository; neither talks to the GitHub API
+directly.
 
 ## Developing this repository
 

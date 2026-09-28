@@ -1,16 +1,17 @@
-"""Bring a repository's copy of productforge-config up to a release.
+"""Bring a repository's copy of productforge-config up to a release, and
+check or apply the GitHub repository settings every ProductForge
+repository shares.
 
-Run in a repository (as `productforge-config update --version vX.Y.Z`,
-typically through `make update-config`, which installs and invokes this
-with uvx from the tag being moved to): moves the productforge-config hook
-source's `rev` in .pre-commit-lint.yaml and the
-`productforge-config/actions/setup@...` ref in every .github/workflows/*.yml
-file to that version, and rewrites the shared keys this release carries —
-the markdownlint rules, and, only for a repository whose .pre-commit-lint.yaml
-actually takes the corresponding hook, the black, isort and flake8 settings
-— into the repository's own local copies. Everything else in those files,
-including a repository's own hooks, ignored paths and excluded paths, is
-left alone.
+`productforge-config update --version vX.Y.Z` (typically through `make
+update-config`, which installs and invokes this with uvx from the tag
+being moved to): moves the productforge-config hook source's `rev` in
+.pre-commit-lint.yaml and the `productforge-config/actions/setup@...` ref
+in every .github/workflows/*.yml file to that version, and rewrites the
+shared keys this release carries — the markdownlint rules, and, only for
+a repository whose .pre-commit-lint.yaml actually takes the corresponding
+hook, the black, isort and flake8 settings — into the repository's own
+local copies. Everything else in those files, including a repository's
+own hooks, ignored paths and excluded paths, is left alone.
 
 `--version` is optional: left unset, or given as "latest", it resolves to
 the newest release tag of this repository (a stable vX.Y.Z, or the newest
@@ -19,14 +20,20 @@ pre-release when no stable release exists yet) via `git ls-remote --tags`
 version is validated against VERSION_RE first, so an invalid one is
 refused rather than half-applied.
 
+`productforge-config github check --repo <owner/name>` and `... github
+apply --repo <owner/name>`: check or apply settings/github.json (see
+github.py) against a live repository via `gh api`. `check` never writes
+anything; `apply` needs repository admin rights on the target.
+
 Stdlib-only by design: this runs via `uvx --from git+...`, in whatever
 repository the person runs it in, and reads the shared settings bundled
 into this package at build time (see pyproject.toml's force-include)
-rather than fetching them over the network itself.
+rather than fetching them over the network itself — aside from `gh api`,
+which the `github` command shells out to deliberately, to reuse the
+caller's own GitHub authentication rather than reimplementing it.
 """
 
 import argparse
-import importlib.resources
 import json
 import re
 import subprocess
@@ -35,6 +42,9 @@ from pathlib import Path
 from typing import Any
 
 import tomllib
+
+from productforge_config import github
+from productforge_config._bundled import bundled_settings_dir as _bundled_settings_dir
 
 HOOK_SOURCE = "https://github.com/andrew-organization/productforge-config"
 ACTION_SOURCE = "andrew-organization/productforge-config/actions/setup"
@@ -163,31 +173,6 @@ def _shared_hook_ids(root: Path) -> set[str]:
     next_repo = _ANY_REPO_LINE_RE.search(tail)
     block = tail[: next_repo.start()] if next_repo else tail
     return set(_HOOK_ID_RE.findall(block))
-
-
-def _bundled_settings_dir() -> Path:
-    """The settings/ directory this package was built from, at its tag.
-
-    A real `uvx --from git+...` install (or `make test`, which forces a
-    non-editable build via UV_NO_EDITABLE) packages settings/ into the
-    wheel — see pyproject.toml's force-include — so importlib.resources
-    finds it there. A plain editable install (`uv sync`'s default, so a
-    bare `uv run pytest` works too) skips that build step and leaves
-    importlib.resources pointing at src/productforge_config itself, which
-    has no settings/ of its own — so this falls back to the repository's
-    real settings/ directory, resolved relative to this source file rather
-    than the current working directory.
-    """
-    packaged = Path(str(importlib.resources.files("productforge_config") / "settings"))
-    if packaged.is_dir():
-        return packaged
-    source_tree = Path(__file__).resolve().parent.parent.parent / "settings"
-    if source_tree.is_dir():
-        return source_tree
-    raise FileNotFoundError(
-        "productforge_config's settings/ directory wasn't found packaged "
-        f"({packaged}) or in the source tree ({source_tree})"
-    )
 
 
 def _load_python_toml() -> dict[str, Any]:
@@ -433,7 +418,7 @@ def update(root: Path, version: str) -> list[str]:
     return changed
 
 
-def main(argv: list[str] | None = None) -> int:
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="productforge-config")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -449,7 +434,30 @@ def main(argv: list[str] | None = None) -> int:
         help="The repository to update (default: the current directory).",
     )
 
-    args = parser.parse_args(argv)
+    github_parser = subparsers.add_parser(
+        "github",
+        help="Check or apply the GitHub repository settings every ProductForge repository shares "
+        "(settings/github.json).",
+    )
+    github_subparsers = github_parser.add_subparsers(dest="github_command", required=True)
+
+    check_parser = github_subparsers.add_parser(
+        "check",
+        help="Print each setting whose live value differs from settings/github.json; "
+        "exit 1 if any differ, 0 if none do.",
+    )
+    check_parser.add_argument("--repo", required=True, help="The repository to check, as owner/name.")
+
+    apply_parser = github_subparsers.add_parser(
+        "apply",
+        help="Apply settings/github.json to a live repository, idempotently. Needs repository admin rights.",
+    )
+    apply_parser.add_argument("--repo", required=True, help="The repository to apply settings to, as owner/name.")
+
+    return parser
+
+
+def _main_update(args: argparse.Namespace) -> int:
     root = Path(args.path).resolve()
     try:
         version = resolve_version(args.version)
@@ -466,6 +474,31 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print(f"productforge-config {version}: already up to date")
     return 0
+
+
+def _main_github(args: argparse.Namespace) -> int:
+    try:
+        if args.github_command == "check":
+            diffs = github.check(args.repo)
+            for line in diffs:
+                print(line)
+            return 1 if diffs else 0
+        applied = github.apply(args.repo)
+        for line in applied:
+            print(line)
+        return 0
+    except subprocess.CalledProcessError as exc:
+        stderr = (exc.stderr or str(exc)).strip()
+        print(f"productforge-config: gh api failed: {stderr}", file=sys.stderr)
+        return 1
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+    if args.command == "update":
+        return _main_update(args)
+    return _main_github(args)
 
 
 if __name__ == "__main__":
