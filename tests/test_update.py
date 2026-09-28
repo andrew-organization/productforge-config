@@ -50,6 +50,22 @@ def test_moves_the_action_ref(repo: Path) -> None:
     assert "v0.9.0" not in text
 
 
+def test_moves_the_shared_release_workflow_ref(repo: Path) -> None:
+    release = repo / ".github" / "workflows" / "release.yml"
+    release.write_text(
+        "jobs:\n"
+        "  release:\n"
+        "    uses: andrew-organization/productforge-config/.github/workflows/release.yml@v0.9.0\n"
+    )
+
+    changed = cli.update(repo, VERSION)
+
+    text = release.read_text()
+    assert f"andrew-organization/productforge-config/.github/workflows/release.yml@{VERSION}" in text
+    assert "v0.9.0" not in text
+    assert ".github/workflows/*.yml" in changed
+
+
 def test_rewrites_markdownlint_config_and_keeps_ignores(repo: Path) -> None:
     cli.update(repo, VERSION)
     text = (repo / ".markdownlint-cli2.jsonc").read_text()

@@ -48,6 +48,7 @@ from productforge_config._bundled import bundled_settings_dir as _bundled_settin
 
 HOOK_SOURCE = "https://github.com/andrew-organization/productforge-config"
 ACTION_SOURCE = "andrew-organization/productforge-config/actions/setup"
+RELEASE_WORKFLOW_SOURCE = "andrew-organization/productforge-config/.github/workflows/release.yml"
 
 BLACK_KEYS = ("target-version", "line-length")
 ISORT_KEYS = ("profile", "line_length")
@@ -76,7 +77,9 @@ _ANY_REPO_LINE_RE = re.compile(r"^[ \t]*-[ \t]*repo:", re.MULTILINE)
 # A hook id in either YAML style: a block list item (`- id: black`) or a flow mapping (`{id: black}`).
 _HOOK_ID_RE = re.compile(r"(?:^[ \t]*-[ \t]*|\{[ \t]*)id:[ \t]*([\w.-]+)", re.MULTILINE)
 # The setup action's ref, the `uses:` value optionally quoted; the ref is group 2, so a closing quote stays.
-_ACTION_REF_RE = re.compile(r"(uses:[ \t]*['\"]?" + re.escape(ACTION_SOURCE) + r"@)([^\s'\"#]+)")
+_ACTION_REF_RE = re.compile(
+    r"(uses:[ \t]*['\"]?(?:" + re.escape(ACTION_SOURCE) + "|" + re.escape(RELEASE_WORKFLOW_SOURCE) + r")@)([^\s'\"#]+)"
+)
 # A section header, allowing a trailing comment as TOML and INI both do.
 _SECTION_HEADER_RE = re.compile(r"^\[([^\]]+)\]\s*(?:[#;].*)?$")
 _TOML_KEY_RE = re.compile(r'^([A-Za-z0-9_.-]+|"[^"]+")[ \t]*=')

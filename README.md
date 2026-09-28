@@ -59,14 +59,15 @@ suffix) before anything is written, and refused with a clear message
 otherwise.
 
 It moves the productforge-config hook source's `rev` in
-`.pre-commit-lint.yaml` and the
-`andrew-organization/productforge-config/actions/setup@...` ref in every
-`.github/workflows/*.yml` file to that version, and rewrites the shared
+`.pre-commit-lint.yaml`, and the
+`andrew-organization/productforge-config/actions/setup@...` and
+`andrew-organization/productforge-config/.github/workflows/release.yml@...`
+refs in every `.github/workflows/*.yml` file, to that version, and rewrites the shared
 keys this release carries into the repository's own local copies
 (`.markdownlint-cli2.jsonc`'s `"config"`; and, only for a hook the
 repository actually takes from this repository's own block in
-`.pre-commit-lint.yaml`, `pyproject.toml`'s `[tool.black]`/`[tool.isort]`
-and `setup.cfg`'s `[flake8]`) — leaving a repository's own hooks, ignored
+`.pre-commit-lint.yaml`, `.yamllint` written whole, `pyproject.toml`'s
+`[tool.black]`/`[tool.isort]` and `setup.cfg`'s `[flake8]`) — leaving a repository's own hooks, ignored
 paths and excluded paths exactly as they were. Commit the result and raise
 it as an ordinary pull request; nothing here opens that pull request for
 you.
