@@ -1,6 +1,6 @@
 [project]
 name = "productforge-config"
-version = "1.0.0"
+dynamic = ["version"]
 description = "ProductForge — the update command that brings a repository up to a productforge-config release"
 requires-python = ">=3.14,<4.0"
 dependencies = []
@@ -12,8 +12,14 @@ productforge-config = "productforge_config.cli:main"
 dev = ["pre-commit>=4.6", "pytest>=9.1"]
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
+
+# The version is the release's git tag, which semantic-release creates on
+# every releasing merge to main; a checkout with no tag builds as 0.0.0.
+[tool.hatch.version]
+source = "vcs"
+raw-options = { fallback_version = "0.0.0" }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/productforge_config"]

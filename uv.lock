@@ -110,7 +110,6 @@ wheels = [
 
 [[package]]
 name = "productforge-config"
-version = "1.0.0"
 source = { editable = "." }
 
 [package.dev-dependencies]

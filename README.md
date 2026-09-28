@@ -2,9 +2,10 @@
 
 Public; holds nothing secret, so every repository's CI reads it without a
 token. What every ProductForge repository has in common: its shared
-pre-commit hooks, its CI setup, and its lint and format settings. Released
-by tag (`vMAJOR.MINOR.PATCH`, with a moving `vMAJOR` tag); a repository is
-brought up to a release by one command, run in it.
+pre-commit hooks, its CI setup, its release workflow, and its lint and format
+settings. Released by tag (`vMAJOR.MINOR.PATCH`), automatically, on every
+releasing merge to main; a repository is brought up to a release by one
+command, run in it.
 
 ## What it holds
 
@@ -39,9 +40,9 @@ uvx --from git+https://github.com/andrew-organization/productforge-config@v1.0.0
 `--version` is optional: left unset, or given as `latest`, it resolves to
 the newest release tag of this repository — a stable `vX.Y.Z`, or the
 newest `-rc.N` when no stable release exists yet. An explicit version is
-validated (`vMAJOR`, `vMAJOR.MINOR`, `vMAJOR.MINOR.PATCH`, any of those
-with a `-rc.N` suffix) before anything is written, and refused with a
-clear message otherwise.
+validated as a release tag (`vMAJOR.MINOR.PATCH`, optionally with a `-rc.N`
+suffix) before anything is written, and refused with a clear message
+otherwise.
 
 It moves the productforge-config hook source's `rev` in
 `.pre-commit-lint.yaml` and the
@@ -76,6 +77,26 @@ repos:
     postgres: "true"       # starts postgres:18-alpine as a background container
     postgres-db: "my_app"  # required when postgres is "true" — no shared default
 ```
+
+```yaml
+# .github/workflows/release.yml, for a repository that releases
+name: Release
+on:
+  push:
+    branches: [main]
+jobs:
+  release:
+    uses: andrew-organization/productforge-config/.github/workflows/release.yml@v1.0.0
+    permissions: {contents: write, issues: write, pull-requests: write}
+    # with:
+    #   prepare-cmd: ./scripts/write-version.sh ${nextRelease.version}   # only if a file carries the version
+    #   check-cmd: ./scripts/check-release.sh                             # only for a check of its own
+```
+
+A merge to main releases by its pull request's title: `feat` a minor,
+`fix`, `perf`, `refactor` and `build(deps)` a patch, a `!` or
+`BREAKING CHANGE` footer a major, anything else nothing. The release is a
+git tag and its GitHub release.
 
 ```makefile
 # Makefile

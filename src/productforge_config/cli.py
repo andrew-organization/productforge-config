@@ -53,12 +53,11 @@ BLACK_KEYS = ("target-version", "line-length")
 ISORT_KEYS = ("profile", "line_length")
 FLAKE8_KEYS = ("max-line-length", "docstring-convention", "extend-ignore")
 
-# Validates an explicit --version before anything is written: vMAJOR,
-# vMAJOR.MINOR, vMAJOR.MINOR.PATCH, any of those with a -rc.N suffix.
-VERSION_RE = re.compile(r"^v\d+(\.\d+){0,2}(-rc\.\d+)?$")
+# Validates an explicit --version before anything is written: a release tag,
+# vMAJOR.MINOR.PATCH, optionally with a -rc.N suffix.
+VERSION_RE = re.compile(r"^v\d+\.\d+\.\d+(-rc\.\d+)?$")
 
-# A specific release tag — as opposed to a moving `vMAJOR` tag, which isn't
-# one — always carries all three components.
+# A release tag always carries all three components.
 _RELEASE_TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)(?:-rc\.(\d+))?$")
 
 # This repository's hook block: its `repo:` line, any blank or comment lines, then `rev:`, the
@@ -106,8 +105,8 @@ def resolve_version(explicit: str | None) -> str:
     if not VERSION_RE.match(explicit):
         raise InvalidVersion(
             f"{explicit!r} isn't a valid productforge-config version — expected "
-            "vMAJOR, vMAJOR.MINOR or vMAJOR.MINOR.PATCH, optionally with a "
-            "-rc.N suffix, e.g. v1.0.0 or v1.0.0-rc.2"
+            "a release tag, vMAJOR.MINOR.PATCH, optionally with a -rc.N "
+            "suffix, e.g. v1.0.0 or v1.0.0-rc.2"
         )
     return explicit
 
@@ -116,9 +115,8 @@ def _parse_release_tags(
     ls_remote_output: str,
 ) -> tuple[dict[tuple[int, int, int], str], dict[tuple[int, int, int, int], str]]:
     """Split `git ls-remote --tags` output into stable and pre-release
-    release tags, each keyed by its version tuple for ordering. A moving
-    `vMAJOR` tag, or anything else that isn't a full vX.Y.Z(-rc.N), is
-    ignored — it isn't a release of its own.
+    release tags, each keyed by its version tuple for ordering. Any other
+    tag, anything that isn't a full vX.Y.Z(-rc.N), is ignored.
     """
     stable: dict[tuple[int, int, int], str] = {}
     prerelease: dict[tuple[int, int, int, int], str] = {}
