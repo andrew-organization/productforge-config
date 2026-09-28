@@ -94,6 +94,19 @@ def _is_public(repo: str) -> tuple[bool, dict[str, Any]]:
     return not live.get("private", True), live
 
 
+def _holds(live: Any, wanted: Any) -> bool:
+    """Whether `live` carries everything `wanted` states: every key a
+    wanted mapping names, holding its wanted value, and every item of a
+    wanted list, in order. GitHub fills in a ruleset's other fields with
+    its own defaults once it's saved, so those extra fields aren't drift.
+    """
+    if isinstance(wanted, dict):
+        return isinstance(live, dict) and all(k in live and _holds(live[k], v) for k, v in wanted.items())
+    if isinstance(wanted, list):
+        return isinstance(live, list) and len(live) == len(wanted) and all(map(_holds, live, wanted))
+    return live == wanted
+
+
 def check(repo: str) -> list[str]:
     """Every setting in settings/github.json whose live value on `repo`
     differs from the file, as one line per difference. An empty list
@@ -126,7 +139,7 @@ def check(repo: str) -> list[str]:
             for key in _RULESET_FIELDS:
                 wanted = ruleset.get(key)
                 live = existing.get(key)
-                if live != wanted:
+                if not _holds(live, wanted):
                     diffs.append(f"ruleset {name!r}.{key}: {live!r} -> {wanted!r}")
 
     return diffs
