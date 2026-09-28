@@ -16,6 +16,9 @@ command, run in it.
   repository; `pyupgrade`, `isort`, `black` and `flake8` for Python; and
   `dart-format` and `flutter-analyze` for a Flutter app, run through its own
   Flutter. A repository takes the ones for the files it has.
+  `end-of-file-fixer` holds every text file to a single final newline,
+  however it got there: inside a commit it stages its own fix and lets the
+  commit through; in CI, or run by hand, it fails as any fixer does.
 - `actions/setup/action.yml` — the CI setup every repository repeats: uv
   with Python 3.14 and its cache, the pre-commit cache keyed on the
   caller's own hook files, and `make install` — with Flutter and Postgres
@@ -26,6 +29,9 @@ command, run in it.
   repository that takes the matching hook, as a real local copy, so editors
   read the same rules; a change here reaches every repository on its next
   update.
+- `settings/editorconfig` — written whole as the `.editorconfig` of each
+  repository that takes `end-of-file-fixer` or `trailing-whitespace`, so
+  editors that read EditorConfig save files the way those hooks leave them.
 - `go.mod` — only so pre-commit can install the golang `checkmake` hook.
 - `src/productforge_config/` — the `productforge-config update` command
   that brings a repository up to a release.
