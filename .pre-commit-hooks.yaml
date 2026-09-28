@@ -17,10 +17,12 @@
   additional_dependencies: ["pre-commit-hooks==6.0.0"]
   types: [text]
 
+# Inside a commit it stages its own fix and lets the commit through; in CI, or
+# run by hand, it fails as any fixer does. See src/productforge_config/final_newline.py.
 - id: end-of-file-fixer
   name: fix end of files
-  description: Ensures a file ends in a single newline.
-  entry: end-of-file-fixer
+  description: Ensures every text file ends in a single newline, staging the fix inside a commit.
+  entry: productforge-final-newline
   language: python
   additional_dependencies: ["pre-commit-hooks==6.0.0"]
   types: [text]
