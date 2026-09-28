@@ -1,6 +1,9 @@
 # This repository publishes these hooks (see .pre-commit-hooks.yaml) for
 # every other ProductForge repository, so it runs them directly, at the
 # same versions, rather than referencing its own not-yet-released self.
+# tests/fixture_repo is the update command's test input, not this
+# repository's own files.
+exclude: ^tests/fixture_repo/
 default_stages: [pre-commit]
 fail_fast: false
 
@@ -40,3 +43,31 @@ repos:
     hooks:
       - id: markdownlint-cli2
         args: [--fix]
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-json
+
+  - repo: https://github.com/adrienverge/yamllint
+    rev: v1.37.1
+    hooks:
+      - id: yamllint
+        args: [--strict]
+
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.10.0.1
+    hooks:
+      - id: shellcheck
+
+  - repo: https://github.com/ComPWA/taplo-pre-commit
+    rev: v0.9.3
+    hooks:
+      - id: taplo-format
+      - id: taplo-lint
+        args: [--no-schema]
+
+  - repo: https://github.com/checkmake/checkmake
+    rev: v0.3.2
+    hooks:
+      - id: checkmake

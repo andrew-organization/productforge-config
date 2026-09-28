@@ -68,3 +68,81 @@
     - flake8-docstrings>=1.7
     - pydocstyle>=6.3
   types: [python]
+
+- id: check-json
+  name: check json
+  description: Checks JSON files parse.
+  entry: check-json
+  language: python
+  additional_dependencies: ["pre-commit-hooks==6.0.0"]
+  types: [json]
+
+- id: yamllint
+  name: yamllint
+  description: Lints YAML, strictly.
+  entry: yamllint
+  language: python
+  additional_dependencies: ["yamllint==1.37.1"]
+  types: [file, yaml]
+  args: ["--strict"]
+
+- id: shellcheck
+  name: shellcheck
+  description: Lints shell scripts.
+  entry: shellcheck
+  language: python
+  additional_dependencies: ["shellcheck-py==0.10.0.1"]
+  types: [shell]
+  require_serial: true
+
+# taplo-lint validates against no schema: taplo 0.9.3 can't decode the
+# remote schemastore.org catalog its default fetches, so that fetch would
+# fail every run touching a TOML file. Formatting is checked in full.
+- id: taplo-format
+  name: taplo format
+  description: Formats TOML.
+  entry: taplo format
+  language: python
+  additional_dependencies: ["taplo==0.9.3"]
+  types: [toml]
+
+- id: taplo-lint
+  name: taplo lint
+  description: Lints TOML.
+  entry: taplo lint
+  language: python
+  additional_dependencies: ["taplo==0.9.3"]
+  types: [toml]
+  args: ["--no-schema"]
+
+- id: checkmake
+  name: checkmake
+  description: Lints Makefiles.
+  entry: checkmake
+  language: golang
+  additional_dependencies: ["github.com/checkmake/checkmake/cmd/checkmake@v0.3.2"]
+  types: [makefile]
+
+# The Flutter hooks every product's web app shares. They run the app's own
+# Flutter, through fvm when it's installed, so they're system hooks. The git
+# variables pre-commit sets are unset first, because Flutter's own git calls
+# would otherwise read the hook's index.
+- id: dart-format
+  name: dart format
+  description: Formats Dart, through fvm when it's installed.
+  entry: >-
+    env -u GIT_INDEX_FILE -u GIT_DIR -u GIT_WORK_TREE -u GIT_PREFIX
+    bash -c 'if command -v fvm >/dev/null 2>&1; then fvm dart format "$@"; else dart format "$@"; fi' --
+  language: system
+  types: [dart]
+
+- id: flutter-analyze
+  name: flutter analyze
+  description: Analyses the Flutter app, failing on infos too.
+  entry: >-
+    env -u GIT_INDEX_FILE -u GIT_DIR -u GIT_WORK_TREE -u GIT_PREFIX
+    bash -c 'if command -v fvm >/dev/null 2>&1; then fvm flutter analyze --fatal-infos;
+    else flutter analyze --fatal-infos; fi'
+  language: system
+  types: [dart]
+  pass_filenames: false

@@ -43,7 +43,8 @@ runs:
       shell: bash
       run: |
         if [ -z "${{ inputs.postgres-db }}" ]; then
-          echo "::error::postgres: \"true\" requires postgres-db (the database postgres:18-alpine creates) — pass it explicitly, e.g. postgres-db: my_app_db" >&2
+          echo "::error::postgres: \"true\" requires postgres-db (the database postgres:18-alpine creates)" \
+            "— pass it explicitly, e.g. postgres-db: my_app_db" >&2
           exit 1
         fi
 
@@ -61,7 +62,9 @@ runs:
       shell: bash
       run: >-
         docker run -d --name postgres -p 5432:5432
-        -e POSTGRES_DB=${{ inputs.postgres-db }} -e POSTGRES_USER=${{ inputs.postgres-user }} -e POSTGRES_PASSWORD=${{ inputs.postgres-password }}
+        -e POSTGRES_DB=${{ inputs.postgres-db }}
+        -e POSTGRES_USER=${{ inputs.postgres-user }}
+        -e POSTGRES_PASSWORD=${{ inputs.postgres-password }}
         postgres:18-alpine
 
     - name: Set up Flutter

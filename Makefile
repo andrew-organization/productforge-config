@@ -1,4 +1,4 @@
-.PHONY: install lint test setup-hooks
+.PHONY: all install lint test clean setup-hooks
 
 # The update command reads settings/ bundled into its own wheel (see
 # pyproject.toml's force-include), exactly as a real `uvx --from git+...`
@@ -6,6 +6,9 @@
 # run in, on every `uv sync` and `uv run` alike — skips that build step and
 # reads straight from src/ instead, missing settings/ entirely.
 export UV_NO_EDITABLE := 1
+
+## Lint and test everything, as CI does
+all: lint test
 
 # ─── Dependencies ───────────────────────────────────────────────────────────
 
@@ -29,6 +32,10 @@ test:
 	PYTHONDONTWRITEBYTECODE=1 uv run pytest
 
 # ─── Housekeeping ───────────────────────────────────────────────────────────
+
+## Remove the virtualenv and the test and build caches
+clean:
+	rm -rf .venv .pytest_cache dist build
 
 ## Install the pre-commit git hook into .git/hooks
 setup-hooks:

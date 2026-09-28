@@ -1,0 +1,18 @@
+# The YAML lint settings every ProductForge repository shares. `make
+# update-config` writes this file whole as a repository's own .yamllint,
+# wherever the repository takes the yamllint hook, so yamllint and editors
+# read the same rules.
+#
+# - truthy doesn't check keys: a GitHub workflow's trigger key is `on`.
+# - comments allow one space before an inline comment, the way a pinned
+#   action carries its version (`uses: owner/action@<sha> # v1.2.3`).
+extends: default
+
+rules:
+  line-length:
+    max: 120
+  document-start: disable
+  truthy:
+    check-keys: false
+  comments:
+    min-spaces-from-content: 1

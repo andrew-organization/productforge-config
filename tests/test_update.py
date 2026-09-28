@@ -303,3 +303,21 @@ def test_refuses_a_repo_it_takes_hooks_from_but_whose_rev_it_cannot_find(repo: P
 
     with pytest.raises(cli.UpdateError):
         cli.update(repo, VERSION)
+
+
+def test_writes_the_shared_yamllint_settings_where_the_hook_is_taken(repo: Path) -> None:
+    lint = repo / ".pre-commit-lint.yaml"
+    lint.write_text(lint.read_text().replace("      - id: flake8\n", "      - id: flake8\n      - id: yamllint\n"))
+    (repo / ".yamllint").write_text("extends: relaxed\n")
+
+    changed = cli.update(repo, VERSION)
+
+    shared = (Path(__file__).parent.parent / "settings" / "yamllint.yaml").read_text()
+    assert (repo / ".yamllint").read_text() == shared
+    assert ".yamllint" in changed
+    assert cli.update(repo, VERSION) == []
+
+
+def test_leaves_yamllint_alone_without_the_hook(repo: Path) -> None:
+    cli.update(repo, VERSION)
+    assert not (repo / ".yamllint").exists()
