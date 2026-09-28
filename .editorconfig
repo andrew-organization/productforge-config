@@ -1,0 +1,9 @@
+# This repository's own copy of settings/editorconfig, which every other
+# ProductForge repository gets through `productforge-config update`.
+# Editors that read EditorConfig save every file the way the shared
+# end-of-file-fixer and trailing-whitespace hooks would leave it.
+root = true
+
+[*]
+insert_final_newline = true
+trim_trailing_whitespace = true

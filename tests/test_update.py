@@ -84,6 +84,7 @@ def test_reports_what_it_changed(repo: Path) -> None:
         ".markdownlint-cli2.jsonc",
         "pyproject.toml",
         "setup.cfg",
+        ".editorconfig",
     }
 
 
@@ -321,3 +322,24 @@ def test_writes_the_shared_yamllint_settings_where_the_hook_is_taken(repo: Path)
 def test_leaves_yamllint_alone_without_the_hook(repo: Path) -> None:
     cli.update(repo, VERSION)
     assert not (repo / ".yamllint").exists()
+
+
+def test_writes_the_shared_editorconfig_where_the_whitespace_hooks_are_taken(repo: Path) -> None:
+    changed = cli.update(repo, VERSION)
+
+    shared = (Path(__file__).parent.parent / "settings" / "editorconfig").read_text()
+    assert (repo / ".editorconfig").read_text() == shared
+    assert ".editorconfig" in changed
+    assert cli.update(repo, VERSION) == []
+
+
+def test_leaves_editorconfig_alone_without_the_whitespace_hooks(repo: Path) -> None:
+    lint = repo / ".pre-commit-lint.yaml"
+    text = lint.read_text()
+    for hook in ("trailing-whitespace", "end-of-file-fixer"):
+        text = re.sub(rf"\n[ \t]*- id: {hook}\n(?:[ \t]+[a-z_]+:[^\n]*\n)*", "\n", text)
+    lint.write_text(text)
+
+    cli.update(repo, VERSION)
+
+    assert not (repo / ".editorconfig").exists()

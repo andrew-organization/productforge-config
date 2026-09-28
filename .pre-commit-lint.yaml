@@ -35,7 +35,16 @@ repos:
     hooks:
       - id: trailing-whitespace
         types: [text]
+
+  # The end-of-file-fixer this repository publishes, run from its own
+  # checkout: every text file ends in a newline, fixed and staged inside a
+  # commit, failing in CI. See src/productforge_config/final_newline.py.
+  - repo: local
+    hooks:
       - id: end-of-file-fixer
+        name: fix end of files
+        entry: productforge-final-newline
+        language: system
         types: [text]
 
   - repo: https://github.com/DavidAnson/markdownlint-cli2
