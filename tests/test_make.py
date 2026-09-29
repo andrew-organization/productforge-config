@@ -14,7 +14,7 @@ import pytest
 
 from productforge_config import cli, ports
 
-from .conftest import VERSION
+from .conftest import VERSION, run_make
 
 # The fixtures are at slot 3: 6160-6179.
 API, POSTGRES, REDIS, FLOWER, SMTP, UI, WEB, TEST_POSTGRES = 6160, 6161, 6162, 6163, 6164, 6165, 6166, 6171
@@ -38,7 +38,7 @@ def web(web_repo: Path) -> Path:
 
 
 def _make(repo: Path, *args: str) -> str:
-    result = subprocess.run(["make", "-n", *args], cwd=repo, capture_output=True, text=True)
+    result = run_make(repo, "-n", *args)
     assert result.returncode == 0, result.stderr
     return result.stdout
 
@@ -130,7 +130,7 @@ def test_up_in_mobile_mode_wires_the_lan_ip_to_the_web_port_of_the_slot(api: Pat
 
 
 def test_up_in_mobile_mode_needs_a_lan_ip(api: Path) -> None:
-    result = subprocess.run(["make", "up", "mode=mobile", "LAN_IP="], cwd=api, capture_output=True, text=True)
+    result = run_make(api, "up", "mode=mobile", "LAN_IP=")
     assert result.returncode != 0
     assert "no LAN IP" in result.stderr
 
@@ -212,7 +212,7 @@ def test_check_generated_regenerates_everything_then_diffs(web: Path) -> None:
 
 
 def test_a_web_repository_gets_no_docker_targets(web: Path) -> None:
-    result = subprocess.run(["make", "-n", "logs"], cwd=web, capture_output=True, text=True)
+    result = run_make(web, "-n", "logs")
     assert result.returncode != 0
     assert "No rule to make target" in result.stderr
 
@@ -228,7 +228,7 @@ def test_install_fetches_pub_packages_before_the_shared_steps(web: Path) -> None
 @pytest.mark.parametrize("fixture", ["api", "web"])
 def test_make_ports_prints_the_slots_ports(fixture: str, request: pytest.FixtureRequest) -> None:
     repo: Path = request.getfixturevalue(fixture)
-    result = subprocess.run(["make", "ports"], cwd=repo, capture_output=True, text=True)
+    result = run_make(repo, "ports")
     assert result.stdout.splitlines() == ["slot 3: 6160-6179", *ports.table(3)]
 
 
@@ -237,7 +237,7 @@ def test_make_refuses_a_restricted_slot_in_the_repository(fixture: str, request:
     repo: Path = request.getfixturevalue(fixture)
     env = repo / "productforge.env"
     env.write_text(env.read_text().replace("PF_SLOT=3", "PF_SLOT=28"))
-    result = subprocess.run(["make", "-n", "test"], cwd=repo, capture_output=True, text=True)
+    result = run_make(repo, "-n", "test")
     assert result.returncode != 0
     assert "Chromium" in result.stderr
 
@@ -259,7 +259,7 @@ def test_the_makefile_keeps_its_own_update_config(api: Path) -> None:
 def _exported_env(repo: Path) -> dict[str, str]:
     """What make hands a recipe: every PF_ value the Makefile works out, from a real make run."""
     (repo / "env.mk").write_text("include Makefile\nprint-env:\n\t@env\n")
-    result = subprocess.run(["make", "-f", "env.mk", "print-env"], cwd=repo, capture_output=True, text=True)
+    result = run_make(repo, "-f", "env.mk", "print-env")
     assert result.returncode == 0, result.stderr
     (repo / "env.mk").unlink()
     return dict(line.split("=", 1) for line in result.stdout.splitlines() if line.startswith("PF_"))

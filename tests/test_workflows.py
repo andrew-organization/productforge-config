@@ -9,7 +9,7 @@ import yaml
 
 from productforge_config import cli
 
-from .conftest import VERSION
+from .conftest import VERSION, run_make
 
 REPO_ROOT = Path(__file__).parent.parent
 WORKFLOWS = REPO_ROOT / ".github" / "workflows"
@@ -95,7 +95,7 @@ def test_every_make_target_it_runs_exists_in_the_kit(kind: str, tmp_path: Path) 
     shutil.copytree(Path(__file__).parent / f"fixture_{kind}", repo)
     cli.update(repo, VERSION)
     for target in _make_targets(kind):
-        result = subprocess.run(["make", "-n", target], cwd=repo, capture_output=True, text=True)
+        result = run_make(repo, "-n", target)
         assert result.returncode == 0, f"make {target}: {result.stderr}"
 
 

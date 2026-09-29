@@ -8,6 +8,8 @@ import pytest
 
 from productforge_config import cli, ports
 
+from .conftest import run_make
+
 REPO_ROOT = Path(__file__).parent.parent
 COMMON_MK = REPO_ROOT / "kits" / "common" / "common.mk"
 
@@ -106,7 +108,7 @@ def _make_ports(tmp_path: Path, slot: str) -> subprocess.CompletedProcess[str]:
     (tmp_path / "productforge.env").write_text(f"PF_KIND=api\nPF_SLOT={slot}\nPF_NAME=demo_app\n")
     (tmp_path / "Makefile").write_text("include productforge.env\ninclude common.mk\n")
     (tmp_path / "common.mk").write_text(COMMON_MK.read_text())
-    return subprocess.run(["make", "ports"], cwd=tmp_path, capture_output=True, text=True)
+    return run_make(tmp_path, "ports")
 
 
 @pytest.mark.parametrize("slot", [0, 1, 2, 27, 30, 198, ports.MAX_SLOT])
