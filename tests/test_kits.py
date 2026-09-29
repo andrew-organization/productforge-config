@@ -400,3 +400,28 @@ def test_moves_any_action_or_workflow_of_this_repository(tmp_path: Path) -> None
     assert text[1] == "b: andrew-organization/productforge-config/.github/workflows/ci-web.yml@v0.1.0"  # no `uses:`
     assert text[2] == "uses: 'andrew-organization/productforge-config/.github/workflows/future.yml@v1.2.3'  # x"
     assert "@v0.1.0" in text[3] and "@v0.1.0" in text[4]
+
+
+SHA = "0123456789abcdef0123456789abcdef01234567"
+
+
+def test_pins_hooks_and_workflow_refs_to_a_commit_sha(api_repo: Path) -> None:
+    assert cli.main(["update", "--version", SHA, "--path", str(api_repo)]) == 0
+    assert f"rev: {SHA}" in (api_repo / ".pre-commit-lint.yaml").read_text()
+    assert f"ci-api.yml@{SHA}" in (api_repo / ".github" / "workflows" / "ci.yml").read_text()
+
+
+def test_init_accepts_a_commit_sha(tmp_path: Path) -> None:
+    code = cli.main(
+        ["init", "--kind", "web", "--name", "acme_web", "--slot", "1", "--version", SHA, "--path", str(tmp_path)]
+    )
+    assert code == 0
+    assert f"ci-web.yml@{SHA}" in (tmp_path / ".github" / "workflows" / "ci.yml").read_text()
+
+
+def test_the_kits_name_no_product_of_the_pipeline() -> None:
+    from productforge_config._bundled import bundled_kits_dir
+
+    for path in bundled_kits_dir().rglob("*"):
+        if path.is_file():
+            assert "the stack" not in path.read_text().lower(), path

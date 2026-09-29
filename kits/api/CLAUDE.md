@@ -15,12 +15,12 @@ overrides.
   for the CI runner to discard
 - `make check-migrations` — fails if a model change has no migration
 - `make lint` — every lint and format hook on every file
-- `make build`, `up`, `down`, `logs`, `shell` — the local Docker stack
+- `make build`, `up`, `down`, `logs`, `shell` — the local Docker Compose project
 - `make lock` — regenerate `uv.lock`
 
 The Django project package is `PF_DJANGO_PROJECT` (`api/<name>/`), and its
-settings module `<name>.settings.base`. The stack gives Django `WEB_ORIGIN`
+settings module `<name>.settings.base`. The Compose project gives Django `WEB_ORIGIN`
 (the web app's origin on this machine) and `FRONTEND_BASE_URL`, both from the
 slot; settings should allow `WEB_ORIGIN` for CORS. The dev database is
-`PF_POSTGRES_DB`, kept in the stack's own volume: `docker compose down -v`
+`PF_POSTGRES_DB`, kept in the Compose project's own volume: `docker compose down -v`
 removes it.

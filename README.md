@@ -69,7 +69,9 @@ uvx --from git+https://github.com/andrew-organization/productforge-config@v1.0.0
 the newest release tag of this repository — a stable `vX.Y.Z`, or the
 newest `-rc.N` when no stable release exists yet. An explicit version is
 validated as a release tag (`vMAJOR.MINOR.PATCH`, optionally with a `-rc.N`
-suffix) before anything is written, and refused with a clear message
+suffix) or a full 40-character commit SHA, which pins the hooks `rev:` and
+the workflow `uses:` refs to that commit so a repository can adopt an
+unreleased config, before anything is written, and refused with a clear message
 otherwise.
 
 It moves the productforge-config hook source's `rev` in
@@ -129,7 +131,7 @@ what is its own.
 
 ### Docker Compose
 
-The API's stack is run as `docker compose --env-file productforge.env -f
+The API's Compose project is run as `docker compose --env-file productforge.env -f
 .productforge/compose.yml [-f docker-compose.local.yml, if present]
 --project-directory .` (Compose v2), which the Makefile does; `.env`, when
 present, is read after `productforge.env` for a developer's own overrides.
@@ -137,7 +139,7 @@ Compose's `include:` doesn't carry a file's `name:`, hence the `-f`. Both compos
 files require their values with `${PF_...:?}`, so a missing one is an error
 naming it: `name:`, image names, ports, the database, `DJANGO_SETTINGS_MODULE`
 (`${PF_DJANGO_PROJECT}.settings.base`) and `celery -A ${PF_DJANGO_PROJECT}`. The
-stack also gives Django `WEB_ORIGIN` and `FRONTEND_BASE_URL`, the web app's
+Compose project also gives Django `WEB_ORIGIN` and `FRONTEND_BASE_URL`, the web app's
 origin on this machine, worked out from the slot. `make up mode=mobile` (on
 the API and on the web app) adds this machine's LAN IP to the allowed hosts and
 CORS origins, and points the web app at the API on that IP, so a phone on the
@@ -191,9 +193,11 @@ old name becomes the new one across the repository: snake_case and kebab-case
 (given in either), the Django project directory `api/<old>/` to `api/<new>/`,
 Dart `package:<old>/` imports and the pubspec's name, and then `uv lock` for an
 API. It leaves `.git`, virtual environments, build output and binary files
-alone. A name without a separator (`app`) is too likely to be an ordinary word
-to replace everywhere, so it gets only the directory, the imports and the
-pubspec's name.
+alone. A name without a separator (`app`, `api`) is too likely to be an ordinary
+word to replace everywhere, so it gets only the directory, the imports and the
+pubspec's name; module paths such as `api.settings` need the caller's care.
+Renaming from `productforge_api_template` or `productforge_web_template`, the
+real use, is safe: those names are unique, so every form of them is replaced.
 
 ## Reusable CI workflows
 

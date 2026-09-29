@@ -201,12 +201,25 @@ def test_extract_balanced_skips_braces_in_strings_and_comments() -> None:
 
 
 def test_resolve_version_accepts_valid_shapes() -> None:
-    for version in ("v1.2.3", "v1.2.3-rc.4"):
+    for version in ("v1.2.3", "v1.2.3-rc.4", "a" * 40, "0123456789abcdef0123456789abcdef01234567"):
         assert cli.resolve_version(version) == version
 
 
 def test_resolve_version_rejects_invalid_shapes() -> None:
-    for version in ("1.2.3", "v1", "v1.2", "v1-rc.4", "v1.2.3.4", "va.b.c", "v1.2.3-beta.1", ""):
+    for version in (
+        "1.2.3",
+        "v1",
+        "v1.2",
+        "v1-rc.4",
+        "v1.2.3.4",
+        "va.b.c",
+        "v1.2.3-beta.1",
+        "",
+        "a" * 39,
+        "a" * 41,
+        "A" * 40,
+        "g" * 40,
+    ):
         with pytest.raises(cli.InvalidVersion):
             cli.resolve_version(version)
 

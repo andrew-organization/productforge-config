@@ -1,5 +1,5 @@
 # A disposable Postgres for the integration tests, on this slot's own test port
-# so it can run beside the local stack. Run it through the repository's
+# so it can run beside the local services. Run it through the repository's
 # Makefile, which supplies the PF_ values this file requires.
 name: ${PF_NAME:?}-test
 

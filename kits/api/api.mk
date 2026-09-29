@@ -1,12 +1,12 @@
 # The rest of an API repository's Makefile: testing, migrations and the local
-# Docker stack. Included after common.mk, which supplies the ports, names and
+# Docker Compose project. Included after common.mk, which supplies the ports, names and
 # the targets every repository shares.
 
 # Speed up builds.
 export COMPOSE_DOCKER_CLI_BUILD=1
 export DOCKER_BUILDKIT=1
 
-# The stack's compose file, from the kit, and this repository's own overlay when it has one. Compose
+# The compose file, from the kit, and this repository's own overlay when it has one. Compose
 # reads productforge.env for the values common.mk works out, and .env, when present, for a
 # developer's own overrides. --project-directory keeps every relative path relative to this
 # repository's root, not to the kit's directory.

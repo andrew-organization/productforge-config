@@ -84,7 +84,8 @@ KIT_EXCLUDE = r"^\.productforge/"
 
 # Validates an explicit --version before anything is written: a release tag,
 # vMAJOR.MINOR.PATCH, optionally with a -rc.N suffix.
-VERSION_RE = re.compile(r"^v\d+\.\d+\.\d+(-rc\.\d+)?$")
+# A full 40-character commit SHA is accepted too, so a repository can adopt an unreleased config.
+VERSION_RE = re.compile(r"^(v\d+\.\d+\.\d+(-rc\.\d+)?|[0-9a-f]{40})$")
 
 # A release tag always carries all three components.
 _RELEASE_TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)(?:-rc\.(\d+))?$")
@@ -136,7 +137,7 @@ def resolve_version(explicit: str | None) -> str:
         raise InvalidVersion(
             f"{explicit!r} isn't a valid productforge-config version — expected "
             "a release tag, vMAJOR.MINOR.PATCH, optionally with a -rc.N "
-            "suffix, e.g. v1.0.0 or v1.0.0-rc.2"
+            "suffix, e.g. v1.0.0 or v1.0.0-rc.2, or a full 40-character commit SHA"
         )
     return explicit
 

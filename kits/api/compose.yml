@@ -1,4 +1,4 @@
-# The local development stack: Django, Postgres, Redis, the Celery worker and
+# The local development services: Django, Postgres, Redis, the Celery worker and
 # beat, Flower and Mailpit. Run it through the repository's Makefile, which
 # supplies the PF_ values this file requires (productforge.env's own, and the
 # ports its slot fixes); compose paths are relative to the repository's root.
@@ -131,7 +131,7 @@ services:
       POSTGRES_PASSWORD: dev
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/0
-      # Local-only dev stack, not a shared/exposed environment — Flower's REST API is left
+      # Local-only dev environment, not a shared/exposed environment — Flower's REST API is left
       # unauthenticated (no Basic Auth) for simplicity rather than adding CELERY_FLOWER_USER/
       # CELERY_FLOWER_PASSWORD env vars.
       FLOWER_UNAUTHENTICATED_API: "1"
