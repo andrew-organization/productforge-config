@@ -14,7 +14,7 @@ $(error PF_SLOT is not set in productforge.env)
 endif
 
 # A name is a valid Compose project name, database, Python package and Dart package at once.
-PF_NAME_ERROR := $(shell echo "$(strip $(PF_NAME))" | grep -Eq '^[a-z][a-z0-9_]*$$' || echo "PF_NAME must be lower-case letters, digits and underscores, starting with a letter, not '$(PF_NAME)'")
+PF_NAME_ERROR := $(shell echo "$(strip $(PF_NAME))" | grep -Eq '^[a-z][a-z0-9_]{0,57}$$' || echo "PF_NAME must be lower-case letters, digits and underscores, starting with a letter, at most 58 characters, not '$(PF_NAME)'")
 ifneq ($(PF_NAME_ERROR),)
 $(error $(PF_NAME_ERROR))
 endif

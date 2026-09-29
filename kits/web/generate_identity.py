@@ -92,7 +92,7 @@ def _write_index_html(product: dict[str, str]) -> None:
     """Rewrites web/index.html's <title> and apple-mobile-web-app-title in place.
 
     Only these two values come from product.yaml; every other line (the meta
-    description included) is this template's own neutral copy, edited by
+    description included) is the repository's own copy, edited by
     hand.
     """
 
@@ -113,7 +113,7 @@ def _write_manifest_json(product: dict[str, str]) -> None:
     """Rewrites web/manifest.json's name and short_name in place.
 
     Only these two fields come from product.yaml; the description and every
-    other field are this template's own neutral copy, edited by hand.
+    other field are the repository's own copy, edited by hand.
     """
 
     manifest = json.loads(MANIFEST_JSON_PATH.read_text())

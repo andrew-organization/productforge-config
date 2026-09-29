@@ -459,3 +459,14 @@ def test_the_claude_fragments_point_at_make_ports_and_document_the_env_overrides
 def test_only_an_api_env_file_offers_the_django_and_database_overrides(tmp_path: Path) -> None:
     assert "PF_DJANGO_PROJECT" in kits.env_text(kits.validate("api", 0, "demo"))
     assert "PF_DJANGO_PROJECT" not in kits.env_text(kits.validate("web", 0, "demo"))
+
+
+@pytest.mark.parametrize("fixture", ["api_repo", "web_repo"])
+def test_no_installed_kit_file_speaks_of_a_template(fixture: str, request: pytest.FixtureRequest) -> None:
+    """A kit lands in every product, so it says only what holds in any repository."""
+    repo: Path = request.getfixturevalue(fixture)
+    cli.update(repo, VERSION)
+    files = [repo / rel for rel in kits.kit_files(kits.read_env(repo).kind)]  # type: ignore[union-attr]
+    assert files
+    for path in files:
+        assert "template" not in path.read_text().lower(), path.relative_to(repo)

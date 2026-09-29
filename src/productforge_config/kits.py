@@ -29,7 +29,10 @@ _CLAUDE = "CLAUDE.md"
 
 # A name lower-case, starting with a letter: one that is a valid Compose project name, image
 # prefix, database name, Python package and Dart package all at once.
-NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
+# At most 58 characters, so that `<name>_test`, the integration tests' database, fits Postgres's
+# 63-character identifier limit.
+MAX_NAME_LENGTH = 58
+NAME_RE = re.compile(rf"^[a-z][a-z0-9_]{{0,{MAX_NAME_LENGTH - 1}}}$")
 _SLOT_RE = re.compile(r"^(0|[1-9][0-9]*)$")
 
 HEADER = (
@@ -88,7 +91,8 @@ def validate(kind: str, slot: str | int, name: str, django_project: str = "", po
     for key, value in (("PF_NAME", name), ("PF_DJANGO_PROJECT", django_project), ("PF_POSTGRES_DB", postgres_db)):
         if value and not NAME_RE.match(value):
             raise EnvError(
-                f"{key} must be lower-case letters, digits and underscores, starting with a letter, not {value!r}"
+                f"{key} must be lower-case letters, digits and underscores, starting with a letter, "
+                f"at most {MAX_NAME_LENGTH} characters, not {value!r}"
             )
     if not name:
         raise EnvError("PF_NAME is not set")

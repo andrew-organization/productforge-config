@@ -171,12 +171,19 @@ def _parse_release_tags(
 
 
 def _latest_release_tag() -> str:
-    result = subprocess.run(
-        ["git", "ls-remote", "--tags", HOOK_SOURCE],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
+    try:
+        result = subprocess.run(
+            ["git", "ls-remote", "--tags", HOOK_SOURCE],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        detail = (getattr(exc, "stderr", None) or str(exc)).strip()
+        raise InvalidVersion(
+            f"couldn't list the release tags at {HOOK_SOURCE} ({detail}); "
+            "check the connection, or pass an explicit --version"
+        ) from exc
     stable, prerelease = _parse_release_tags(result.stdout)
     if stable:
         return stable[max(stable)]

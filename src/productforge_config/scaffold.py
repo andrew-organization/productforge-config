@@ -7,6 +7,7 @@ then runs `update` so `.productforge/` and the rest of the kit are in place. A p
 creation calls this once. The two thin files are kits/init/'s templates.
 """
 
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -41,6 +42,27 @@ def run_uv_lock(root: Path) -> None:
         raise InitError(f"`uv lock` failed after the rename: {detail.strip()}") from exc
 
 
+def format_dart(root: Path) -> str | None:
+    """Format lib/ and test/ after a rename: a shorter package name lets `dart format` re-wrap lines,
+    which `make lint` would otherwise fail on. Through fvm when it is installed. Returns a note when
+    there is nothing to format with, None once formatted.
+    """
+    if shutil.which("fvm"):
+        command = ["fvm", "dart", "format"]
+    elif shutil.which("dart"):
+        command = ["dart", "format"]
+    else:
+        return "dart not found: run `dart format lib test` before `make lint`"
+    directories = [d for d in ("lib", "test") if (root / d).is_dir()]
+    if directories:
+        try:
+            subprocess.run([*command, *directories], cwd=root, check=True, capture_output=True, text=True)
+        except (OSError, subprocess.CalledProcessError) as exc:
+            detail = (getattr(exc, "stderr", None) or str(exc)).strip()
+            raise InitError(f"`dart format` failed after the rename: {detail}") from exc
+    return None
+
+
 def init(root: Path, env: kits.ProductEnv, version: str, old_name: str | None = None) -> list[str]:
     """Write the repository's own files, renaming it first when `old_name` is given. Returns what
     it changed, the kit's own files excluded (`update` reports those) and a rename summarised as
@@ -55,6 +77,9 @@ def init(root: Path, env: kits.ProductEnv, version: str, old_name: str | None = 
         except rename.RenameError as exc:
             raise InitError(str(exc)) from exc
         changed.append(f"{len(renamed)} paths renamed from {old_name}")
+        if env.kind == "web":
+            note = format_dart(root)
+            changed.append(note or "lib and test formatted")
         if (root / "pyproject.toml").is_file():
             run_uv_lock(root)
             changed.append("uv.lock")

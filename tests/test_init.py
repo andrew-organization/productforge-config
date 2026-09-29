@@ -11,8 +11,17 @@ from .conftest import TESTS, VERSION
 
 # scaffold.run_uv_lock as it is before the autouse fixture below replaces it.
 REAL_RUN_UV_LOCK = scaffold.run_uv_lock
+REAL_FORMAT_DART = scaffold.format_dart
 TEMPLATE_API = "productforge_api_template"
 TEMPLATE_WEB = "productforge_web_template"
+
+
+@pytest.fixture(autouse=True)
+def no_dart_format(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
+    """Whatever dart is on this machine, formatting is recorded, not run."""
+    calls: list[Path] = []
+    monkeypatch.setattr(scaffold, "format_dart", lambda root: calls.append(root))
+    return calls
 
 
 @pytest.fixture(autouse=True)
@@ -308,3 +317,82 @@ def test_a_web_rename_re_locks_a_pyproject_too(tmp_path: Path, no_uv_lock: list[
     empty.mkdir()
     _init(empty, "--from", TEMPLATE_WEB, kind="web", name="acme_web")
     assert no_uv_lock == []
+
+
+def _stub_tools(bin_dir: Path, *names: str) -> Path:
+    """Executables that log their arguments and their directory, standing in for fvm and dart."""
+    bin_dir.mkdir(exist_ok=True)
+    log = bin_dir / "log"
+    for name in names:
+        tool = bin_dir / name
+        tool.write_text(f'#!/bin/sh\necho "{name} $* @ $(basename "$PWD")" >> "{log}"\n')
+        tool.chmod(0o755)
+    return log
+
+
+def test_a_web_rename_formats_lib_and_test_through_dart(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = tmp_path / "shop"
+    (repo / "lib").mkdir(parents=True)
+    (repo / "test").mkdir()
+    log = _stub_tools(tmp_path / "bin", "dart")
+    monkeypatch.setenv("PATH", f"{tmp_path / 'bin'}:/usr/bin:/bin")
+    assert REAL_FORMAT_DART(repo) is None
+    assert log.read_text().splitlines() == ["dart format lib test @ shop"]
+
+
+def test_a_web_rename_prefers_fvm_when_it_is_installed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = tmp_path / "shop"
+    (repo / "lib").mkdir(parents=True)
+    log = _stub_tools(tmp_path / "bin", "dart", "fvm")
+    monkeypatch.setenv("PATH", f"{tmp_path / 'bin'}:/usr/bin:/bin")
+    assert REAL_FORMAT_DART(repo) is None
+    assert log.read_text().splitlines() == ["fvm dart format lib @ shop"]  # only the directories there are
+
+
+def test_a_web_rename_says_so_when_there_is_no_dart_to_format_with(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "bin").mkdir()
+    monkeypatch.setenv("PATH", str(tmp_path / "bin"))
+    note = REAL_FORMAT_DART(tmp_path)
+    assert note is not None and "dart format lib test" in note
+
+
+def test_init_formats_only_a_web_rename(tmp_path: Path, no_dart_format: list[Path]) -> None:
+    _api_template(tmp_path / "api")
+    _init(tmp_path / "api", "--from", TEMPLATE_API, name="acme_api")
+    assert no_dart_format == []
+    (tmp_path / "web").mkdir()
+    _init(tmp_path / "web", "--from", TEMPLATE_WEB, kind="web", name="acme_web")
+    assert no_dart_format == [(tmp_path / "web").resolve()]
+    no_dart_format.clear()
+    _init(tmp_path / "web", kind="web", name="acme_web")  # no rename, nothing to format
+    assert no_dart_format == []
+
+
+def test_a_failing_dart_format_stops_init_with_its_message(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (tmp_path / "lib").mkdir()
+    (tmp_path / "bin").mkdir()
+    tool = tmp_path / "bin" / "dart"
+    tool.write_text("#!/bin/sh\necho 'syntax error' >&2\nexit 65\n")
+    tool.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path / 'bin'}:/usr/bin:/bin")
+    with pytest.raises(scaffold.InitError, match="syntax error"):
+        REAL_FORMAT_DART(tmp_path)
+
+
+# ─── Names ────────────────────────────────────────────────────────────────
+
+
+def test_a_name_leaves_room_for_the_test_database_suffix() -> None:
+    longest = "a" * kits.MAX_NAME_LENGTH
+    assert kits.validate("api", 0, longest).name == longest
+    assert len(f"{longest}_test") <= 63
+    with pytest.raises(kits.EnvError, match="at most 58 characters"):
+        kits.validate("api", 0, longest + "a")
+
+
+def test_init_refuses_a_name_too_long_for_postgres(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    assert _init(tmp_path, name="a" * 59) == 1
+    assert "at most 58" in capsys.readouterr().err
+    assert list(tmp_path.iterdir()) == []
