@@ -24,3 +24,18 @@ settings module `<name>.settings.base`. The Compose project gives Django `WEB_OR
 slot; settings should allow `WEB_ORIGIN` for CORS. The dev database is
 `PF_POSTGRES_DB`, kept in the Compose project's own volume: `docker compose down -v`
 removes it.
+
+## Local overrides (`.env`)
+
+A `.env` at the repository's root (gitignored, never committed) is read after
+`productforge.env`, for values that are one developer's own. Every one is
+optional; without them the API allows `localhost` only.
+
+- `DJANGO_ALLOWED_HOSTS` — extra Django `ALLOWED_HOSTS` entries, for example
+  this machine's LAN IP, to reach the API from a phone on the same network.
+- `CORS_EXTRA_ORIGINS` — extra allowed CORS origins, comma-separated; the web
+  app's own origin on that LAN IP, for the same reason.
+- `FRONTEND_BASE_URL` — where a link in a sent email (verification, invite)
+  points. Defaults to `http://localhost:<web port>` from the slot.
+
+`make up mode=mobile` sets all three for one run from this machine's LAN IP.

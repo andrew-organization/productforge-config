@@ -117,14 +117,15 @@ def env_text(env: ProductEnv) -> str:
     """The productforge.env a repository with these values commits."""
     return (
         "# This repository's own values for the build, run, test and CI kit it takes from\n"
-        "# productforge-config (see .productforge/CLAUDE.md). Dotenv: read by make, by Docker\n"
-        "# Compose and by CI.\n"
+        "# productforge-config (see .productforge/CLAUDE.md). Dotenv: read by make and by\n"
+        "# Docker Compose.\n"
         f"PF_KIND={env.kind}\n"
         f"PF_SLOT={env.slot}\n"
         f"PF_NAME={env.name}\n"
-        "# Optional, each defaulting to PF_NAME:\n"
-        "# PF_DJANGO_PROJECT=\n"
-        "# PF_POSTGRES_DB=\n"
+    ) + (
+        "# Optional, each defaulting to PF_NAME:\n# PF_DJANGO_PROJECT=\n# PF_POSTGRES_DB=\n"
+        if env.kind == "api"
+        else ""
     )
 
 
@@ -162,7 +163,7 @@ def kit_files(kind: str) -> dict[str, str]:
         for path in sorted(p for p in source.rglob("*") if p.is_file()):
             relative = path.relative_to(source)
             if relative == Path(_CLAUDE):
-                claude.append(path.read_text().rstrip("\n") + "\n")
+                claude.append(path.read_text().strip("\n") + "\n")
             elif relative.parts[0] == _ROOT_DIR:
                 files[str(Path(*relative.parts[1:]))] = path.read_text()
             else:
@@ -174,7 +175,7 @@ def kit_files(kind: str) -> dict[str, str]:
 def _manifest_text(installed: set[str]) -> str:
     return (
         "# The files productforge-config's `update` installed from a kit, so that a later kit can\n"
-        "# remove the ones it no longer carries. Generated: do not edit.\n"
+        "# remove the ones this kit does not carry. Generated: do not edit.\n"
         + "".join(f"{p}\n" for p in sorted(installed))
     )
 

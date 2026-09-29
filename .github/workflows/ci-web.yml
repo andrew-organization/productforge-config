@@ -9,11 +9,11 @@ name: CI (web)
 #       uses: andrew-organization/productforge-config/.github/workflows/ci-web.yml@vX.Y.Z
 #       permissions: {contents: read}
 #
-# It reads the repository's own values from productforge.env into the job's
-# environment and runs the make targets a developer runs, so a failure here
-# reproduces locally with the same command. A reusable workflow can't reference
-# an action of this repository at its own tag, so the setup that
-# actions/setup shares is written out here.
+# It runs the make targets a developer runs (make and Docker Compose read the
+# repository's own productforge.env), so a failure here reproduces locally with
+# the same command. A reusable workflow can't reference an action of this
+# repository at its own tag, so its setup steps are written out here and mirror
+# actions/setup/action.yml: a change to either goes in both.
 on:
   workflow_call:
 
@@ -23,10 +23,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      # KEY=value lines, the PF_ ones only.
-      - name: Read productforge.env
-        run: grep -E '^PF_[A-Z_]+=' productforge.env >> "$GITHUB_ENV"
 
       # The Flutter version the repository's own .fvmrc pins.
       - name: Set up Flutter

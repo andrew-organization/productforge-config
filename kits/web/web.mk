@@ -84,6 +84,7 @@ test:
 
 ## Build the production web bundle (build/web), talking to the API of this slot. Usage: make build [mode=mobile]
 build:
+	$(if $(filter mobile,$(mode)),@test -n "$(LAN_IP)" || { echo "build: no LAN IP found for mode=mobile" >&2; exit 1; })
 	$(FLUTTER) build web $(DART_DEFINES)
 
 ## Start the local dev server, hot-reloadable, without launching a browser itself: open the URL in
@@ -96,6 +97,7 @@ build:
 ## 127.0.0.1: a phone loading it gets a blank page. Testing from another device needs `make build
 ## mode=mobile` and `make serve-build` instead.
 up:
+	$(if $(filter mobile,$(mode)),@test -n "$(LAN_IP)" || { echo "up: no LAN IP found for mode=mobile" >&2; exit 1; })
 	$(FLUTTER) run -d web-server --web-port=$(PF_PORT_WEB) $(DART_DEFINES) $(if $(filter mobile,$(mode)),--web-hostname=0.0.0.0)
 
 ## Same as "up", but launches Flutter's "chrome" web device instead — whichever Chromium-based

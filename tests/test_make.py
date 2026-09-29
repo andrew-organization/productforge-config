@@ -483,3 +483,29 @@ def test_serve_web_build_falls_back_to_the_index_for_an_unknown_path(web: Path) 
     finally:
         server.terminate()
         server.wait()
+
+
+@pytest.mark.parametrize("fixture", ["api", "web"])
+def test_a_bare_make_runs_the_kinds_all(fixture: str, request: pytest.FixtureRequest) -> None:
+    repo: Path = request.getfixturevalue(fixture)
+    assert _make(repo) == _make(repo, "all")
+    assert "uv sync" not in _make(repo)
+
+
+def test_a_bare_make_in_an_api_repository_rebuilds_and_restarts(api: Path) -> None:
+    out = _make(api)
+    assert out.index(" down ") < out.index(" build") < out.index(" up ")
+
+
+@pytest.mark.parametrize("target", ["up", "build"])
+def test_web_mobile_mode_needs_a_lan_ip(web: Path, target: str) -> None:
+    result = run_make(web, target, "mode=mobile", "LAN_IP=")
+    assert result.returncode != 0
+    assert f"{target}: no LAN IP found for mode=mobile" in result.stderr
+
+
+def test_make_refuses_a_name_that_is_not_snake_case(api: Path) -> None:
+    (api / "productforge.env").write_text("PF_KIND=api\nPF_SLOT=3\nPF_NAME=Not-Snake\n")
+    result = run_make(api, "-n", "test")
+    assert result.returncode != 0
+    assert "PF_NAME must be lower-case" in result.stderr

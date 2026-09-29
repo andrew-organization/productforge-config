@@ -55,7 +55,7 @@ def init(root: Path, env: kits.ProductEnv, version: str, old_name: str | None = 
         except rename.RenameError as exc:
             raise InitError(str(exc)) from exc
         changed.append(f"{len(renamed)} paths renamed from {old_name}")
-        if env.kind == "api" and (root / "pyproject.toml").is_file():
+        if (root / "pyproject.toml").is_file():
             run_uv_lock(root)
             changed.append("uv.lock")
     for relative, text in (

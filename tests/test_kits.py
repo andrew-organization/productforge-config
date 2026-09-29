@@ -425,3 +425,37 @@ def test_the_kits_name_no_product_of_the_pipeline() -> None:
     for path in bundled_kits_dir().rglob("*"):
         if path.is_file():
             assert "the stack" not in path.read_text().lower(), path
+
+
+def test_check_exits_2_on_an_error_and_1_on_drift(api_repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    assert cli.main(["update", "--version", "nope", "--path", str(api_repo), "--check"]) == 2
+    (api_repo / "productforge.env").write_text("PF_KIND=api\nPF_SLOT=28\nPF_NAME=demo\n")
+    assert cli.main(["update", "--version", VERSION, "--path", str(api_repo), "--check"]) == 2
+    assert "6665" in capsys.readouterr().err
+    (api_repo / "productforge.env").write_text("PF_KIND=api\nPF_SLOT=1\nPF_NAME=demo\n")
+    assert cli.main(["update", "--version", VERSION, "--path", str(api_repo), "--check"]) == 1
+
+
+def test_the_claude_fragments_join_without_leading_blank_lines(api_repo: Path) -> None:
+    cli.update(api_repo, VERSION)
+    text = (api_repo / ".productforge" / "CLAUDE.md").read_text()
+    assert "\n\n\n" not in text
+    assert "\n\n## API targets" in text
+
+
+def test_the_claude_fragments_point_at_make_ports_and_document_the_env_overrides(
+    api_repo: Path, web_repo: Path
+) -> None:
+    cli.update(api_repo, VERSION)
+    cli.update(web_repo, VERSION)
+    api = (api_repo / ".productforge" / "CLAUDE.md").read_text()
+    for name in ("DJANGO_ALLOWED_HOSTS", "CORS_EXTRA_ORIGINS", "FRONTEND_BASE_URL"):
+        assert name in api
+    for text in (api, (web_repo / ".productforge" / "CLAUDE.md").read_text()):
+        assert "`make ports`" in text
+        assert "6100" not in text.replace("6100 + 20", "")
+
+
+def test_only_an_api_env_file_offers_the_django_and_database_overrides(tmp_path: Path) -> None:
+    assert "PF_DJANGO_PROJECT" in kits.env_text(kits.validate("api", 0, "demo"))
+    assert "PF_DJANGO_PROJECT" not in kits.env_text(kits.validate("web", 0, "demo"))

@@ -228,7 +228,7 @@ def test_uv_lock_reports_what_it_ran_and_what_went_wrong(tmp_path: Path, monkeyp
     assert ran == [["uv", "lock"]]
 
 
-def test_a_web_rename_covers_dart_imports_and_the_pubspec_name(tmp_path: Path, no_uv_lock: list[Path]) -> None:
+def test_a_web_rename_covers_dart_imports_and_the_pubspec_name(tmp_path: Path) -> None:
     kebab = TEMPLATE_WEB.replace("_", "-")
     (tmp_path / "lib").mkdir()
     (tmp_path / "pubspec.yaml").write_text(f'name: {TEMPLATE_WEB}\ndescription: "{kebab} — Flutter web app"\n')
@@ -239,7 +239,6 @@ def test_a_web_rename_covers_dart_imports_and_the_pubspec_name(tmp_path: Path, n
     assert "acme-web — Flutter web app" in (tmp_path / "pubspec.yaml").read_text()
     assert "package:acme_web/config/product.dart" in (tmp_path / "lib" / "main.dart").read_text()
     assert (tmp_path / "README.md").read_text() == "# acme-web\n"
-    assert no_uv_lock == []
 
 
 def test_a_name_without_a_separator_is_renamed_only_where_it_is_unambiguous(tmp_path: Path) -> None:
@@ -277,3 +276,35 @@ def test_init_reports_a_rename_as_one_line_not_one_per_file(tmp_path: Path, caps
     out = capsys.readouterr().out
     assert "paths renamed from productforge_api_template" in out
     assert "README.md" not in out
+
+
+@pytest.mark.parametrize(
+    ("kind", "template"),
+    [("api", TEMPLATE_API), ("web", TEMPLATE_WEB)],
+)
+def test_a_products_copy_names_the_product_and_nothing_names_the_template(
+    tmp_path: Path, kind: str, template: str
+) -> None:
+    kebab = template.replace("_", "-")
+    (tmp_path / "CLAUDE.md").write_text(f"# {kebab}\n\nThis is {kebab}, built from {template}.\n")
+    (tmp_path / "README.md").write_text(f"# {kebab}\n\nRun `{template}` locally.\n")
+    (tmp_path / "pyproject.toml").write_text(f'[project]\nname = "{kebab}"\n')
+    assert _init(tmp_path, "--from", template, kind=kind, name="acme_shop") == 0
+    for path in sorted(tmp_path.rglob("*")):
+        rel = path.relative_to(tmp_path)
+        if path.is_file() and rel.parts[0] != ".git":
+            text = path.read_text()
+            assert template not in text and kebab not in text, rel
+    assert (tmp_path / "CLAUDE.md").read_text() == "# acme-shop\n\nThis is acme-shop, built from acme_shop.\n"
+    assert 'name = "acme-shop"' in (tmp_path / "pyproject.toml").read_text()
+
+
+def test_a_web_rename_re_locks_a_pyproject_too(tmp_path: Path, no_uv_lock: list[Path]) -> None:
+    (tmp_path / "pyproject.toml").write_text(f'[project]\nname = "{TEMPLATE_WEB.replace("_", "-")}"\n')
+    _init(tmp_path, "--from", TEMPLATE_WEB, kind="web", name="acme_web")
+    assert no_uv_lock == [tmp_path.resolve()]
+    no_uv_lock.clear()
+    empty = tmp_path / "other"
+    empty.mkdir()
+    _init(empty, "--from", TEMPLATE_WEB, kind="web", name="acme_web")
+    assert no_uv_lock == []

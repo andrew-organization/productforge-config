@@ -75,18 +75,27 @@ unreleased config, before anything is written, and refused with a clear message
 otherwise.
 
 It moves the productforge-config hook source's `rev` in
-`.pre-commit-lint.yaml`, and the
-`andrew-organization/productforge-config/actions/setup@...` and
-`andrew-organization/productforge-config/.github/workflows/release.yml@...`
-refs in every `.github/workflows/*.yml` file, to that version, and rewrites the shared
-keys this release carries into the repository's own local copies
+`.pre-commit-lint.yaml`, and every
+`andrew-organization/productforge-config/actions/...@ref` and
+`andrew-organization/productforge-config/.github/workflows/...@ref` in every
+`.github/workflows/*.yml` file (the setup action, the release workflow, the
+reusable CI workflows), to that version, and rewrites the shared keys this
+release carries into the repository's own local copies
 (`.markdownlint-cli2.jsonc`'s `"config"`; and, only for a hook the
 repository actually takes from this repository's own block in
 `.pre-commit-lint.yaml`, `.yamllint` written whole, `pyproject.toml`'s
-`[tool.black]`/`[tool.isort]` and `setup.cfg`'s `[flake8]`) — leaving a repository's own hooks, ignored
-paths and excluded paths exactly as they were. Commit the result and raise
-it as an ordinary pull request; nothing here opens that pull request for
-you.
+`[tool.black]`/`[tool.isort]`, its `[tool.mypy]` strictness for
+`django-mypy`, and `setup.cfg`'s `[flake8]`) — leaving a repository's own
+hooks, ignored paths and excluded paths exactly as they were. A repository
+with a `productforge.env` also takes its kit (see "Kits"); one without takes
+nothing kit-related. Commit the result and raise it as an ordinary pull
+request; nothing here opens that pull request for you.
+
+`update --check` changes nothing: it lists what an update would change, and
+exits 1 when there is anything to change, 0 when there is not, and 2 when it
+cannot tell (an invalid version, or a `productforge.env` it can't use). It
+finds a kit file edited by hand, a stale file the update would remove, and a
+workflow ref behind the release.
 
 ## Kits
 
@@ -114,7 +123,7 @@ each file with a header saying it is generated and to change it here:
 | `web` | `web.mk` (`l10n`, `generate`, `identity`, `check-identity-regeneration`, `check-generated`, `test`, `build`, `up`, `debug`, `down`, `serve-build`, `all`), `generate_identity.py`, `check_identity_regeneration.py`, `serve_web_build.py`, `analysis_options.yaml` |
 
 Every file the kit wrote is listed in `.productforge/manifest`, so an update
-removes a file an earlier kit installed that this one no longer carries, and
+removes a file an earlier kit installed that this kit does not carry, and
 leaves any other file alone. Beside the kit, `update` writes the settings that
 go at fixed paths: `.pre-commit-config.yaml` for the kind, and for a web app
 `.fvmrc` and the pubspec's `environment.sdk`; and it keeps
@@ -215,8 +224,7 @@ jobs:
       contents: read
 ```
 
-Each reads the `PF_*` lines of `productforge.env` into the job's environment
-and runs the make targets a developer runs: the API's `make lint`, `make
+Each runs the make targets a developer runs: the API's `make lint`, `make
 check-migrations`, `make test` and `make test-integration-ci` (which starts the
 test Postgres from `compose.test.yml`) in parallel after `make install`; the
 web's `make check-generated` and `make check-identity-regeneration`, then `make

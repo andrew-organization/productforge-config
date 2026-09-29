@@ -656,12 +656,12 @@ def _main_update(args: argparse.Namespace) -> int:
         version = resolve_version(args.version)
     except InvalidVersion as exc:
         print(f"productforge-config: {exc}", file=sys.stderr)
-        return 1
+        return 2 if args.check else 1
     try:
         changed = update(root, version, check=args.check)
     except (UpdateError, kits.EnvError) as exc:
         print(f"productforge-config: {exc}", file=sys.stderr)
-        return 1
+        return 2 if args.check else 1
     if args.check:
         if not changed:
             print(f"productforge-config {version}: no drift")

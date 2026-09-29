@@ -13,6 +13,15 @@ ifeq ($(strip $(PF_SLOT)),)
 $(error PF_SLOT is not set in productforge.env)
 endif
 
+# A name is a valid Compose project name, database, Python package and Dart package at once.
+PF_NAME_ERROR := $(shell echo "$(strip $(PF_NAME))" | grep -Eq '^[a-z][a-z0-9_]*$$' || echo "PF_NAME must be lower-case letters, digits and underscores, starting with a letter, not '$(PF_NAME)'")
+ifneq ($(PF_NAME_ERROR),)
+$(error $(PF_NAME_ERROR))
+endif
+
+# A bare `make` rebuilds and restarts (api), or runs everything CI runs (web): the kind's own `all`.
+.DEFAULT_GOAL := all
+
 # A dotenv file's own values may carry stray whitespace; make keeps it.
 PF_KIND := $(strip $(PF_KIND))
 PF_NAME := $(strip $(PF_NAME))

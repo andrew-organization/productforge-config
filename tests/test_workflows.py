@@ -1,7 +1,6 @@
 """Tests of the reusable CI workflows, ci-api.yml and ci-web.yml, against the kits they run."""
 
 import re
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -100,10 +99,11 @@ def test_every_make_target_it_runs_exists_in_the_kit(kind: str, tmp_path: Path) 
 
 
 @pytest.mark.parametrize("kind", ["api", "web"])
-def test_reads_productforge_env_into_the_job_environment(kind: str, tmp_path: Path) -> None:
-    (read,) = (s for s in _steps(kind) if s.get("name") == "Read productforge.env")
-    env = tmp_path / "productforge.env"
-    env.write_text("# a comment\nPF_KIND=api\nPF_SLOT=3\nPF_NAME=demo\nOTHER=ignored\n")
-    github_env = tmp_path / "github_env"
-    subprocess.run(["bash", "-e", "-c", read["run"]], cwd=tmp_path, env={"GITHUB_ENV": str(github_env)}, check=True)
-    assert github_env.read_text().splitlines() == ["PF_KIND=api", "PF_SLOT=3", "PF_NAME=demo"]
+def test_needs_no_step_to_read_productforge_env(kind: str) -> None:
+    """Make and Docker Compose read the file themselves, so the workflows copy nothing into the job."""
+    assert "GITHUB_ENV" not in (WORKFLOWS / f"ci-{kind}.yml").read_text()
+
+
+@pytest.mark.parametrize("kind", ["api", "web"])
+def test_says_its_setup_mirrors_the_setup_action(kind: str) -> None:
+    assert "mirror" in (WORKFLOWS / f"ci-{kind}.yml").read_text().split("on:")[0]

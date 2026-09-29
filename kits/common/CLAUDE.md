@@ -21,8 +21,9 @@ keeps `update-config`. Each target's options are documented above it in
 ## Ports
 
 A slot owns 20 local ports from 6100 + 20 × slot. The API and the web app of a
-product share a slot, so each derives the other's port. `make ports` prints
-this repository's own.
+product share a slot, so each derives the other's port. Find this
+repository's own ports with `make ports`, never from a number written down
+elsewhere; the offsets below are what stays fixed.
 
 | Offset | Service |
 | --- | --- |
