@@ -1,0 +1,60 @@
+name: CI (API)
+
+# The checks every ProductForge API repository runs on a pull request. A
+# repository calls it from its own ci.yml, which `productforge-config init`
+# writes:
+#
+#   jobs:
+#     ci:
+#       uses: andrew-organization/productforge-config/.github/workflows/ci-api.yml@vX.Y.Z
+#       permissions: {contents: read}
+#
+# It reads the repository's own values from productforge.env into the job's
+# environment and runs the make targets a developer runs, so a failure here
+# reproduces locally with the same command. A reusable workflow can't reference
+# an action of this repository at its own tag, so the setup that
+# actions/setup shares is written out here.
+on:
+  workflow_call:
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # KEY=value lines, the PF_ ones only.
+      - name: Read productforge.env
+        run: grep -E '^PF_[A-Z_]+=' productforge.env >> "$GITHUB_ENV"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          python-version: "3.14"
+          enable-cache: true
+          prune-cache: true
+
+      - name: Cache pre-commit environments
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ hashFiles('.pre-commit-config.yaml', '.pre-commit-lint.yaml') }}
+
+      - name: Install dependencies
+        run: make install
+
+      # Parallel steps run inside a reusable workflow just as in a caller's own job.
+      - parallel:
+          - name: Lint
+            run: make lint
+
+          - name: Missing migrations
+            run: make check-migrations
+
+          - name: Unit tests
+            run: make test
+
+          # Starts its own Postgres from the kit's compose.test.yml, on this slot's test port.
+          - name: Integration tests
+            run: make test-integration-ci

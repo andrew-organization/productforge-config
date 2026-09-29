@@ -1,9 +1,0 @@
-name: Scratch caller
-
-on:
-  push:
-    branches: [build-and-run-kits]
-
-jobs:
-  ci:
-    uses: ./.github/workflows/scratch-parallel-reusable.yml
