@@ -137,6 +137,9 @@ ProductForge repository shares — not a repository's own local copy, but
 the live GitHub-side configuration itself. Each value is proposed for
 review before it's ever applied to a real repository:
 
+- **Default branch**: `main` (`default_branch`), the branch every workflow,
+  release and product copy is built around; `check` reports any repository
+  on another.
 - **Merge methods**: squash only (`allow_squash_merge`, with
   `allow_merge_commit` and `allow_rebase_merge` both false) — one commit
   per pull request on the target branch, so history reads as a list of
