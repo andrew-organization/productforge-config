@@ -43,16 +43,18 @@ def run_uv_lock(root: Path) -> None:
 
 def init(root: Path, env: kits.ProductEnv, version: str, old_name: str | None = None) -> list[str]:
     """Write the repository's own files, renaming it first when `old_name` is given. Returns what
-    it changed, the kit's own files excluded (`update` reports those).
+    it changed, the kit's own files excluded (`update` reports those) and a rename summarised as
+    one line, not a line for each file.
     """
     changed: list[str] = []
     if old_name:
         if not kits.NAME_RE.match(old_name.replace("-", "_")):
             raise InitError(f"--from must be a name in snake_case or kebab-case, not {old_name!r}")
         try:
-            changed += rename.rename(root, old_name, env.name)
+            renamed = rename.rename(root, old_name, env.name)
         except rename.RenameError as exc:
             raise InitError(str(exc)) from exc
+        changed.append(f"{len(renamed)} paths renamed from {old_name}")
         if env.kind == "api" and (root / "pyproject.toml").is_file():
             run_uv_lock(root)
             changed.append("uv.lock")

@@ -269,3 +269,11 @@ def test_a_name_that_contains_the_old_one_is_renamed_once(tmp_path: Path) -> Non
     (tmp_path / "a.txt").write_text("acme_api and acme-api\n")
     rename.rename(tmp_path, "acme_api", "acme_api_v2")
     assert (tmp_path / "a.txt").read_text() == "acme_api_v2 and acme-api-v2\n"
+
+
+def test_init_reports_a_rename_as_one_line_not_one_per_file(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    _api_template(tmp_path)
+    _init(tmp_path, "--from", TEMPLATE_API, name="acme_api")
+    out = capsys.readouterr().out
+    assert "paths renamed from productforge_api_template" in out
+    assert "README.md" not in out
