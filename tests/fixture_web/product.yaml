@@ -1,0 +1,5 @@
+# A fixture product's identity.
+name: Fixture Web
+short_name: Fixture
+email_from: noreply@fixture.local
+domain: fixture.local

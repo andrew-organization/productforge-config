@@ -1,0 +1,8 @@
+# The analyzer settings every ProductForge web app shares: the recommended
+# Flutter lints. A project's own analysis_options.yaml includes this file and
+# adds only what is its own:
+#
+#   include: .productforge/analysis_options.yaml
+#
+# The analyzer's findings, infos included, fail `make lint`.
+include: package:flutter_lints/flutter.yaml

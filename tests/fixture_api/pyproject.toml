@@ -1,0 +1,20 @@
+[project]
+name = "api"
+version = "0.1.0"
+requires-python = ">=3.14,<4.0"
+
+[tool.black]
+target-version = ["py312"]
+line-length = 88
+
+[tool.isort]
+profile = "black"
+line_length = 88
+skip_glob = ["*/migrations/*"]
+
+[tool.mypy]
+python_version = "3.12"
+mypy_path = "api"
+plugins = ["mypy_django_plugin.main"]
+disallow_any_explicit = false
+disallow_untyped_defs = true

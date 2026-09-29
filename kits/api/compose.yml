@@ -1,0 +1,140 @@
+# The local development stack: Django, Postgres, Redis, the Celery worker and
+# beat, Flower and Mailpit. Run it through the repository's Makefile, which
+# supplies the PF_ values this file requires (productforge.env's own, and the
+# ports its slot fixes); compose paths are relative to the repository's root.
+name: ${PF_NAME:?}
+
+volumes:
+  local_postgres_data: {}
+  uv-cache: {}
+
+services:
+  django: &django
+    build:
+      context: .
+      dockerfile: ./.productforge/Dockerfile
+    image: ${PF_NAME:?}_django
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mailpit:
+        condition: service_started
+    volumes:
+      - ./api:/app
+      # Bind-mounting ./api over /app leaves nothing above it inside the container, so
+      # product.yaml — at this repository's root, one level above ./api on the host —
+      # is mounted at the container's own filesystem root to match.
+      - ./product.yaml:/product.yaml:ro
+      - uv-cache:/root/.cache/uv
+    environment:
+      DJANGO_SETTINGS_MODULE: ${PF_DJANGO_PROJECT:?}.settings.base
+      DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-}
+      CORS_EXTRA_ORIGINS: ${CORS_EXTRA_ORIGINS:-}
+      # The web app's own origin on this machine, from the slot both repositories of a product share.
+      WEB_ORIGIN: http://localhost:${PF_PORT_WEB:?}
+      FRONTEND_BASE_URL: ${FRONTEND_BASE_URL:-http://localhost:${PF_PORT_WEB:?}}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${PF_POSTGRES_DB:?}
+      POSTGRES_USER: dev
+      POSTGRES_PASSWORD: dev
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      EMAIL_HOST: mailpit
+      EMAIL_PORT: 1025
+    ports:
+      - "${PF_PORT_API:?}:8000"
+    command: sh -c "uv run python manage.py migrate && uv run python manage.py runserver 0:8000"
+
+  postgres:
+    image: postgres:18-alpine
+    volumes:
+      - local_postgres_data:/var/lib/postgresql
+    environment:
+      POSTGRES_DB: ${PF_POSTGRES_DB:?}
+      POSTGRES_USER: dev
+      POSTGRES_PASSWORD: dev
+    ports:
+      - "${PF_PORT_POSTGRES:?}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dev -d ${PF_POSTGRES_DB:?}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "${PF_PORT_REDIS:?}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Local-only SMTP catcher. Every email the project sends locally lands here
+  # instead of a real inbox — view them on the Mailpit UI port (`make ports`).
+  mailpit:
+    image: axllent/mailpit:latest
+    ports:
+      - "${PF_PORT_MAILPIT_SMTP:?}:1025"
+      - "${PF_PORT_MAILPIT_UI:?}:8025"
+
+  celeryworker:
+    <<: *django
+    image: ${PF_NAME:?}_celeryworker
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mailpit:
+        condition: service_started
+      django:
+        condition: service_started
+    ports: []
+    command: uv run celery -A ${PF_DJANGO_PROJECT:?} worker --loglevel=info
+
+  celerybeat:
+    <<: *django
+    image: ${PF_NAME:?}_celerybeat
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      django:
+        condition: service_started
+    ports: []
+    command: >-
+      uv run celery -A ${PF_DJANGO_PROJECT:?} beat --loglevel=info
+      --scheduler common.celery.scheduler.DatabaseSchedulerWithCleanup
+
+  flower:
+    <<: *django
+    image: ${PF_NAME:?}_flower
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      celeryworker:
+        condition: service_started
+    environment:
+      DJANGO_SETTINGS_MODULE: ${PF_DJANGO_PROJECT:?}.settings.base
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${PF_POSTGRES_DB:?}
+      POSTGRES_USER: dev
+      POSTGRES_PASSWORD: dev
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      # Local-only dev stack, not a shared/exposed environment — Flower's REST API is left
+      # unauthenticated (no Basic Auth) for simplicity rather than adding CELERY_FLOWER_USER/
+      # CELERY_FLOWER_PASSWORD env vars.
+      FLOWER_UNAUTHENTICATED_API: "1"
+    ports:
+      - "${PF_PORT_FLOWER:?}:5555"
+    command: uv run celery -A ${PF_DJANGO_PROJECT:?} flower --port=5555

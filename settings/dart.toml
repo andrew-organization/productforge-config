@@ -1,0 +1,5 @@
+# The Dart SDK constraint that goes with the Flutter version settings/fvmrc pins:
+# `productforge-config update` writes it into a web repository's pubspec.yaml,
+# as `environment.sdk`, so the two never drift apart.
+[environment]
+sdk = "^3.12.2"

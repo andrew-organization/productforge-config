@@ -1,9 +1,9 @@
 # This repository publishes these hooks (see .pre-commit-hooks.yaml) for
 # every other ProductForge repository, so it runs them directly, at the
 # same versions, rather than referencing its own not-yet-released self.
-# tests/fixture_repo is the update command's test input, not this
+# tests/fixture_* are the update command's test inputs, not this
 # repository's own files.
-exclude: ^tests/fixture_repo/
+exclude: ^tests/fixture_(repo|api|web)/
 default_stages: [pre-commit]
 fail_fast: false
 
@@ -80,3 +80,6 @@ repos:
     rev: v0.3.2
     hooks:
       - id: checkmake
+        # The kits' makefiles are fragments the repository's own Makefile includes, which
+        # checkmake, reading one file at a time, can't see whole.
+        exclude: ^kits/
