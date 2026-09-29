@@ -142,3 +142,16 @@ def test_end_of_file_fixer_still_fails_inside_a_commit_in_ci(tmp_path: Path) -> 
     )
 
     assert result.returncode != 0, result.stdout + result.stderr
+
+
+def test_django_mypy_hook_is_a_system_hook_over_the_projects_own_environment() -> None:
+    import yaml
+
+    hooks = {hook["id"]: hook for hook in yaml.safe_load((REPO_ROOT / ".pre-commit-hooks.yaml").read_text())}
+    hook = hooks["django-mypy"]
+    assert hook["language"] == "system"
+    assert hook["types"] == ["python"]
+    assert "uv run mypy" in hook["entry"]
+    assert "PYTHONPATH=api" in hook["entry"]
+    assert "--config-file=pyproject.toml" in hook["entry"]
+    assert hook["entry"].rstrip().endswith("--")  # bash -c '…' -- receives the filenames as "$@"

@@ -71,6 +71,23 @@
     - pydocstyle>=6.3
   types: [python]
 
+# django-mypy runs the project's own uv-managed venv (a system hook), not an
+# isolated environment: mypy's Django plugin initialises Django to introspect
+# settings, so every real runtime dependency, not only django-stubs, must be
+# importable wherever mypy runs, and the project's venv already has them all.
+# It reports errors without blocking a commit until a project's type coverage
+# allows it (see pre-commit/pre-commit#923). The strictness comes from
+# [tool.mypy] in pyproject.toml, which `update` keeps to settings/python.toml.
+- id: django-mypy
+  name: mypy
+  description: Type-checks a Django API with mypy, through the project's own uv environment.
+  entry: >-
+    bash -c 'PYTHONPATH=api uv run mypy --follow-imports=silent --config-file=pyproject.toml
+    --namespace-packages --explicit-package-bases "$@" || true' --
+  language: system
+  types: [python]
+  verbose: true
+
 - id: check-json
   name: check json
   description: Checks JSON files parse.

@@ -1,0 +1,17 @@
+default_stages: [pre-commit]
+fail_fast: false
+
+repos:
+  - repo: https://github.com/andrew-organization/productforge-config
+    rev: v0.9.0
+    hooks:
+      - id: trailing-whitespace
+        types: [text]
+      - id: end-of-file-fixer
+        types: [text]
+      - id: markdownlint
+        args: [--fix]
+      - id: yamllint
+      - id: checkmake
+      - id: dart-format
+      - id: flutter-analyze

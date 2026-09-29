@@ -201,12 +201,25 @@ def test_extract_balanced_skips_braces_in_strings_and_comments() -> None:
 
 
 def test_resolve_version_accepts_valid_shapes() -> None:
-    for version in ("v1.2.3", "v1.2.3-rc.4"):
+    for version in ("v1.2.3", "v1.2.3-rc.4", "a" * 40, "0123456789abcdef0123456789abcdef01234567"):
         assert cli.resolve_version(version) == version
 
 
 def test_resolve_version_rejects_invalid_shapes() -> None:
-    for version in ("1.2.3", "v1", "v1.2", "v1-rc.4", "v1.2.3.4", "va.b.c", "v1.2.3-beta.1", ""):
+    for version in (
+        "1.2.3",
+        "v1",
+        "v1.2",
+        "v1-rc.4",
+        "v1.2.3.4",
+        "va.b.c",
+        "v1.2.3-beta.1",
+        "",
+        "a" * 39,
+        "a" * 41,
+        "A" * 40,
+        "g" * 40,
+    ):
         with pytest.raises(cli.InvalidVersion):
             cli.resolve_version(version)
 
@@ -359,3 +372,33 @@ def test_leaves_editorconfig_alone_without_the_whitespace_hooks(repo: Path) -> N
     cli.update(repo, VERSION)
 
     assert not (repo / ".editorconfig").exists()
+
+
+def test_a_failing_ls_remote_is_a_clean_error_not_a_traceback(monkeypatch: pytest.MonkeyPatch) -> None:
+    def offline(*args: object, **kwargs: object) -> None:
+        raise cli.subprocess.CalledProcessError(128, "git", stderr="fatal: unable to access\n")
+
+    monkeypatch.setattr(cli.subprocess, "run", offline)
+    with pytest.raises(cli.InvalidVersion, match="unable to access"):
+        cli.resolve_version(None)
+
+
+def test_a_missing_git_is_a_clean_error_too(monkeypatch: pytest.MonkeyPatch) -> None:
+    def no_git(*args: object, **kwargs: object) -> None:
+        raise FileNotFoundError("git")
+
+    monkeypatch.setattr(cli.subprocess, "run", no_git)
+    with pytest.raises(cli.InvalidVersion, match="couldn't list the release tags"):
+        cli.resolve_version("latest")
+
+
+@pytest.mark.parametrize(("extra", "code"), [(["--check"], 2), ([], 1)])
+def test_main_exits_cleanly_when_the_latest_tag_cannot_be_resolved(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], extra: list[str], code: int
+) -> None:
+    def offline(*args: object, **kwargs: object) -> None:
+        raise cli.subprocess.CalledProcessError(128, "git", stderr="offline")
+
+    monkeypatch.setattr(cli.subprocess, "run", offline)
+    assert cli.main(["update", "--path", str(repo), *extra]) == code
+    assert "offline" in capsys.readouterr().err

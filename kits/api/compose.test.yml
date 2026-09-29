@@ -1,0 +1,26 @@
+# A disposable Postgres for the integration tests, on this slot's own test port
+# so it can run beside the local services. Run it through the repository's
+# Makefile, which supplies the PF_ values this file requires.
+name: ${PF_NAME:?}-test
+
+volumes:
+  test_postgres_data: {}
+
+services:
+  postgres-test:
+    image: postgres:18-alpine
+    volumes:
+      - test_postgres_data:/var/lib/postgresql
+    environment:
+      POSTGRES_HOST: postgres-test
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${PF_POSTGRES_DB:?}_test
+      POSTGRES_USER: dev
+      POSTGRES_PASSWORD: dev
+    ports:
+      - "${PF_PORT_TEST_POSTGRES:?}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dev -d ${PF_POSTGRES_DB:?}_test"]
+      interval: 2s
+      timeout: 5s
+      retries: 10

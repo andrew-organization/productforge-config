@@ -1,0 +1,17 @@
+name: CI
+
+on:
+  # Every pull request, whatever it targets, so a PR stacked on another
+  # gets the same checks as one targeting main.
+  pull_request:
+
+# A new push to a pull request cancels the run it supersedes.
+concurrency:
+  group: ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    uses: andrew-organization/productforge-config/.github/workflows/ci-__KIND__.yml@__VERSION__
+    permissions:
+      contents: read

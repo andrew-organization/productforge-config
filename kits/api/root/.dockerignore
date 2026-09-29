@@ -1,0 +1,13 @@
+# What the API image's build context leaves out. The image copies only
+# pyproject.toml, uv.lock and its entrypoint; the code is bind-mounted at run
+# time, so nothing else needs to reach the daemon.
+.git
+.github
+.venv
+.env
+.mypy_cache
+.pytest_cache
+**/__pycache__
+**/*.pyc
+.idea
+.vscode

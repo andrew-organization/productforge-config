@@ -1,0 +1,11 @@
+name: fixture_web
+description: "A fixture web app"
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.0.0  # the Dart SDK
+
+dependencies:
+  flutter:
+    sdk: flutter

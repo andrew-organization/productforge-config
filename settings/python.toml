@@ -1,8 +1,8 @@
-# The Python lint and format settings every ProductForge repository shares.
-# `make update-config` rewrites these exact keys into a repository's own
-# pyproject.toml ([tool.black], [tool.isort]) and setup.cfg ([flake8]),
-# leaving every other key there — a repository's own excluded paths among
-# them — untouched.
+# The Python lint, format and type-checking settings every ProductForge
+# repository shares. `make update-config` rewrites these exact keys into a
+# repository's own pyproject.toml ([tool.black], [tool.isort], and [tool.mypy]
+# where it takes django-mypy) and setup.cfg ([flake8]), leaving every other key
+# there — a repository's own excluded paths among them — untouched.
 
 [tool.black]
 target-version = ["py314"]
@@ -16,3 +16,21 @@ line_length = 120
 max-line-length = 120
 docstring-convention = "google"
 extend-ignore = "D100,D101,D102,D103,D104,D105,D106,D107,D200,D202,D205,D212,D415,E203,W503"
+
+# The type-checking strictness every Django API takes, written into
+# [tool.mypy] wherever the repository takes the django-mypy hook. What is the
+# project's own — mypy_path, plugins, overrides — stays in its pyproject.toml.
+[tool.mypy]
+python_version = "3.14"
+check_untyped_defs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = false
+disallow_untyped_decorators = false
+disallow_any_generics = false
+disallow_any_explicit = true
+warn_return_any = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_unused_configs = true
+ignore_missing_imports = true
+follow_imports = "silent"

@@ -10,7 +10,12 @@ productforge-config = "productforge_config.cli:main"
 productforge-final-newline = "productforge_config.final_newline:main"
 
 [dependency-groups]
-dev = ["pre-commit>=4.6", "pre-commit-hooks==6.0.0", "pytest>=9.1"]
+dev = [
+  "pre-commit>=4.6",
+  "pre-commit-hooks==6.0.0",
+  "pytest>=9.1",
+  "pyyaml>=6.0",
+]
 
 [build-system]
 requires = ["hatchling", "hatch-vcs"]
@@ -25,12 +30,13 @@ raw-options = { fallback_version = "0.0.0" }
 [tool.hatch.build.targets.wheel]
 packages = ["src/productforge_config"]
 
-# The settings/ this repository publishes, and its own .pre-commit-hooks.yaml,
+# The settings/ and kits/ this repository publishes
 # are bundled into the wheel so the update command — installed fresh with
 # uvx from a tag — reads exactly what that tag published, with no network
 # call of its own. See src/productforge_config/cli.py.
 [tool.hatch.build.targets.wheel.force-include]
 "settings" = "productforge_config/settings"
+"kits" = "productforge_config/kits"
 
 [tool.uv]
 package = true
