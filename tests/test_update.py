@@ -82,6 +82,7 @@ def test_reports_what_it_changed(repo: Path) -> None:
         "setup.cfg",
         ".editorconfig",
         ".yamllint",
+        ".python-version",
         ".productforge/common.mk",
         ".productforge/python.mk",
         ".productforge/pre-commit.yaml",

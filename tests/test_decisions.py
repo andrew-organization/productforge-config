@@ -89,6 +89,31 @@ def test_a_pyproject_without_a_project_table_gets_no_requires_python(tmp_path: P
     assert "requires-python" not in (tmp_path / "pyproject.toml").read_text()
 
 
+def test_every_repository_gets_the_stated_python_as_a_python_version_file(web_repo: Path, api_repo: Path) -> None:
+    """A repository with no Python kit (the web template) states no `requires-python`, so uv would pick
+    whatever Python the machine has; the common kit writes the one this release states.
+    """
+    for repo in (web_repo, api_repo):
+        cli.update(repo, VERSION)
+        assert (repo / ".python-version").read_text() == f"{_state()}\n"
+    assert ".python-version" in (web_repo / ".productforge" / "manifest").read_text()
+
+
+def test_changing_the_version_moves_the_python_version_file(api_repo: Path, settings_with_python) -> None:
+    settings_with_python("3.15")
+    cli.update(api_repo, VERSION)
+    assert (api_repo / ".python-version").read_text() == "3.15\n"
+
+
+def test_check_fails_on_a_hand_edited_python_version_file(web_repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    cli.update(web_repo, VERSION)
+    (web_repo / ".python-version").write_text("3.11\n")
+    assert _check(web_repo) == 1
+    assert ".python-version" in capsys.readouterr().out
+    cli.update(web_repo, VERSION)
+    assert _check(web_repo) == 0
+
+
 def test_the_setup_action_reads_the_same_file_the_update_reads() -> None:
     action = (REPO_ROOT / "actions" / "setup" / "action.yml").read_text()
     assert "settings/python.toml" in action
