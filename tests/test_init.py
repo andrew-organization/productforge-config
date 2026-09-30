@@ -40,12 +40,13 @@ def _init(repo: Path, *extra: str, kind: str = "api", name: str = "acme_api", sl
 
 def test_writes_the_three_files_and_installs_the_kit(tmp_path: Path) -> None:
     assert _init(tmp_path) == 0
-    assert (tmp_path / "productforge.env").read_text().splitlines()[3:6] == [
-        "PF_KIND=api",
+    assert (tmp_path / "productforge.env").read_text().splitlines()[4:7] == [
+        "PF_KITS=python django-api",
         "PF_SLOT=5",
         "PF_NAME=acme_api",
     ]
-    assert (tmp_path / ".productforge" / "api.mk").is_file()
+    assert (tmp_path / ".productforge" / "django-api.mk").is_file()
+    assert (tmp_path / ".productforge" / "release").read_text() == f"{VERSION}\n"
     assert (tmp_path / ".productforge" / "manifest").is_file()
     ci = (tmp_path / ".github" / "workflows" / "ci.yml").read_text()
     assert f"uses: andrew-organization/productforge-config/.github/workflows/ci-api.yml@{VERSION}" in ci
@@ -57,19 +58,18 @@ def test_writes_the_three_files_and_installs_the_kit(tmp_path: Path) -> None:
 
 def test_the_read_back_values_are_the_ones_given(tmp_path: Path) -> None:
     _init(tmp_path, kind="web", name="acme_web", slot="12")
-    env = kits.read_env(tmp_path)
-    assert env is not None
-    assert (env.kind, env.slot, env.name) == ("web", 12, "acme_web")
+    decl = kits.read_env(tmp_path)
+    assert decl is not None
+    assert (decl.kits, decl.slot, decl.name) == (("flutter-web",), 12, "acme_web")
 
 
-def test_the_thin_makefile_includes_the_kit_and_keeps_update_config(tmp_path: Path) -> None:
+def test_the_thin_makefile_includes_every_kit_makefile(tmp_path: Path) -> None:
     _init(tmp_path, kind="web", name="acme_web")
     makefile = (tmp_path / "Makefile").read_text()
     lines = makefile.splitlines()
-    assert lines[:3] == ["include productforge.env", "include .productforge/common.mk", "include .productforge/web.mk"]
-    assert ".PHONY: all clean test update-config" in lines
-    assert "update-config:" in lines
-    assert "uvx --from git+https://github.com/andrew-organization/productforge-config@$$version" in makefile
+    assert lines[:2] == ["include productforge.env", "include $(sort $(wildcard .productforge/*.mk))"]
+    assert ".PHONY: all clean test" in lines
+    assert "update-config" not in makefile  # common.mk carries the recipe
 
 
 @pytest.mark.parametrize("kind", ["api", "web"])
@@ -83,7 +83,7 @@ def test_the_thin_makefile_passes_checkmake(kind: str, tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("kind", ["api", "web"])
 def test_the_fixtures_thin_files_are_what_init_writes(kind: str) -> None:
-    env = kits.validate(kind, 3, f"fixture_{kind}")
+    env = kits.for_kind(kind, 3, f"fixture_{kind}")
     fixture = TESTS / f"fixture_{kind}"
     assert (fixture / "Makefile").read_text() == scaffold.makefile_text(env)
     assert (fixture / ".github" / "workflows" / "ci.yml").read_text() == scaffold.ci_text(env, "v0.9.0")
@@ -389,10 +389,10 @@ def test_a_failing_dart_format_stops_init_with_its_message(tmp_path: Path, monke
 
 def test_a_name_leaves_room_for_the_test_database_suffix() -> None:
     longest = "a" * kits.MAX_NAME_LENGTH
-    assert kits.validate("api", 0, longest).name == longest
+    assert kits.for_kind("api", 0, longest).name == longest
     assert len(f"{longest}_test") <= 63
     with pytest.raises(kits.EnvError, match="at most 58 characters"):
-        kits.validate("api", 0, longest + "a")
+        kits.for_kind("api", 0, longest + "a")
 
 
 def test_init_refuses_a_name_too_long_for_postgres(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

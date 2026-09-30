@@ -4,7 +4,8 @@ This repository takes its build, run, test and CI configuration from
 productforge-config, installed into `.productforge/` by `make update-config`,
 and supplies only its own values, in `productforge.env` at its root:
 
-- `PF_KIND` — `api` or `web`, which kit it takes.
+- `PF_KITS` — the kits it takes: `python django-api` for an API, `flutter-web`
+  for a web app.
 - `PF_SLOT` — its port slot, shared with the other repository of the product.
 - `PF_NAME` — its name: the Compose project name, image prefix, database name,
   and the Django project package or the Dart package.
@@ -14,9 +15,8 @@ and supplies only its own values, in `productforge.env` at its root:
 Change nothing in `.productforge/`: `make update-config` writes it whole, so a
 change there is lost on the next update. To change what every repository
 shares, change productforge-config. The Makefile is thin: it includes
-`productforge.env`, `.productforge/common.mk` and the kit's own `.mk`, and
-keeps `update-config`. Each target's options are documented above it in
-`.productforge/*.mk`.
+`productforge.env` and every `.productforge/*.mk`, and keeps its own targets.
+Each target's options are documented above it in `.productforge/*.mk`.
 
 ## Ports
 

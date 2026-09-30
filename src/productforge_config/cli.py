@@ -4,22 +4,17 @@ repository shares.
 
 `productforge-config update --version vX.Y.Z` (typically through `make
 update-config`, which installs and invokes this with uvx from the tag
-being moved to): moves the productforge-config hook source's `rev` in
-.pre-commit-lint.yaml and the `productforge-config/actions/setup@...` ref
-in every .github/workflows/*.yml file to that version, and rewrites the
-shared keys this release carries — the markdownlint rules, and, only for
-a repository whose .pre-commit-lint.yaml actually takes the corresponding
-hook, the black, isort and flake8 settings — into the repository's own
-local copies. Everything else in those files, including a repository's
-own hooks, ignored paths and excluded paths, is left alone.
-
-A repository with a `productforge.env` at its root also takes a kit — its
-build, run, test and CI configuration — named by its `PF_KIND`: `update`
-installs the kit whole into `.productforge/` (see kits.py), the settings that
-go at fixed paths (`.pre-commit-config.yaml`, and for a web app `.fvmrc` and
-the pubspec's SDK constraint), and keeps `.pre-commit-lint.yaml` excluding the
-generated `.productforge/`. `update --check` reports what an update would
-change and exits 1 when there is any. `init` gives a repository its own values
+being moved to): writes the files of every kit the repository's
+`productforge.env` declares (see kits.py), moves every
+`productforge-config/...@ref` in .github/workflows/*.yml to that version, and
+merges the shared keys this release carries — the markdownlint rules and, for
+the python kit, the black, isort and flake8 settings, and for django-api the
+mypy strictness — into the repository's own files, leaving every other key
+alone. A repository from before the kits (declared with PF_KIND, its hooks
+listed in .pre-commit-lint.yaml) is moved to them in the same run.
+`update --check` reports what an update would change and exits 1 when there
+is any, or 2 when it cannot tell; without --version it checks at the release
+recorded in .productforge/release. `init` gives a repository its declaration
 and the thin files that use them (scaffold.py), and `ports` prints a slot's
 ports (ports.py).
 
@@ -56,7 +51,7 @@ import tomllib
 from productforge_config import _files, github, kits, ports, scaffold
 from productforge_config._bundled import bundled_settings_dir as _bundled_settings_dir
 
-HOOK_SOURCE = "https://github.com/andrew-organization/productforge-config"
+HOOK_SOURCE = kits.HOOK_SOURCE
 # Anything this repository publishes for a workflow to use — an action, or a reusable workflow —
 # as the `owner/repo/path` part of a `uses:` value, as a regex.
 _REF_SOURCE_PATTERN = r"andrew-organization/productforge-config/(?:actions|\.github/workflows)/[^\s'\"@#]+"
@@ -79,8 +74,6 @@ MYPY_KEYS = (
     "ignore_missing_imports",
     "follow_imports",
 )
-# What the generated `.productforge/` is excluded from linting by, as a pre-commit `exclude` regex.
-KIT_EXCLUDE = r"^\.productforge/"
 
 # Validates an explicit --version before anything is written: a release tag,
 # vMAJOR.MINOR.PATCH, optionally with a -rc.N suffix.
@@ -90,21 +83,12 @@ VERSION_RE = re.compile(r"^(v\d+\.\d+\.\d+(-rc\.\d+)?|[0-9a-f]{40})$")
 # A release tag always carries all three components.
 _RELEASE_TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)(?:-rc\.(\d+))?$")
 
-# This repository's hook block: its `repo:` line, any blank or comment lines, then `rev:`, the
-# version optionally quoted — the version itself is group 2, so the quotes stay as written.
-_HOOK_REPO_RE = re.compile(
-    r"(^[ \t]*-[ \t]*repo:[ \t]*['\"]?"
-    + re.escape(HOOK_SOURCE)
-    + r"(?:\.git)?['\"]?[ \t]*(?:#[^\n]*)?\n(?:[ \t]*(?:#[^\n]*)?\n)*[ \t]*rev:[ \t]*['\"]?)([^\s'\"#]+)",
-    re.MULTILINE,
-)
+# This repository's hook block: its `repo:` line, alone on the line.
 _HOOK_REPO_LINE_RE = re.compile(
     r"^[ \t]*-[ \t]*repo:[ \t]*['\"]?" + re.escape(HOOK_SOURCE) + r"(?:\.git)?['\"]?[ \t]*(?:#[^\n]*)?$",
     re.MULTILINE,
 )
 _ANY_REPO_LINE_RE = re.compile(r"^[ \t]*-[ \t]*repo:", re.MULTILINE)
-# A hook id in either YAML style: a block list item (`- id: black`) or a flow mapping (`{id: black}`).
-_HOOK_ID_RE = re.compile(r"(?:^[ \t]*-[ \t]*|\{[ \t]*)id:[ \t]*([\w.-]+)", re.MULTILINE)
 # A workflow ref this repository publishes, the `uses:` value optionally quoted; the ref is group 2,
 # so a closing quote stays.
 _ACTION_REF_RE = re.compile(r"(uses:[ \t]*['\"]?" + _REF_SOURCE_PATTERN + r"@)([^\s'\"#},]+)")
@@ -190,25 +174,6 @@ def _latest_release_tag() -> str:
     if prerelease:
         return prerelease[max(prerelease)]
     raise InvalidVersion(f"no release tags found at {HOOK_SOURCE}")
-
-
-def _shared_hook_ids(root: Path) -> set[str]:
-    """The hook ids a repository actually takes from this repository's own
-    block in its .pre-commit-lint.yaml (empty when the file, or that
-    block, is absent) — so a rewrite only touches settings a repository's
-    hooks actually use.
-    """
-    path = root / ".pre-commit-lint.yaml"
-    if not path.exists():
-        return set()
-    text = path.read_text()
-    match = _HOOK_REPO_LINE_RE.search(text)
-    if match is None:
-        return set()
-    tail = text[match.end() :]
-    next_repo = _ANY_REPO_LINE_RE.search(tail)
-    block = tail[: next_repo.start()] if next_repo else tail
-    return set(_HOOK_ID_RE.findall(block))
 
 
 def _load_python_toml() -> dict[str, Any]:
@@ -358,19 +323,6 @@ def _set_ini_keys(text: str, section: str, keys: dict[str, Any]) -> str:
 _write_if_changed = _files.write_if_changed
 
 
-def update_pre_commit_lint(root: Path, version: str) -> bool:
-    path = root / ".pre-commit-lint.yaml"
-    if not path.exists():
-        return False
-    text = path.read_text()
-    new_text, count = _HOOK_REPO_RE.subn(lambda m: m.group(1) + version, text)
-    if count == 0:
-        if _HOOK_REPO_LINE_RE.search(text):
-            raise UpdateError(f"{path}: takes this repository's hooks but no rev could be found to move")
-        return False
-    return _write_if_changed(path, new_text)
-
-
 def update_workflows(root: Path, version: str) -> bool:
     changed = False
     workflows_dir = root / ".github" / "workflows"
@@ -385,135 +337,53 @@ def update_workflows(root: Path, version: str) -> bool:
 
 
 def update_markdownlint(root: Path) -> bool:
+    """Keeps the shared Markdown lint rules as the "config" block of the repository's own
+    .markdownlint-cli2.jsonc, whose header and ignores stay as they are; writes the file when absent.
+    """
     path = root / ".markdownlint-cli2.jsonc"
+    shared = _markdownlint_config_text()
     if not path.exists():
-        return False
+        return _write_if_changed(path, '{\n  "config": ' + shared + "\n}\n")
     text = path.read_text()
     try:
-        _, _, current = _extract_balanced(text, "config")
+        start, end, current = _extract_balanced(text, "config")
     except ValueError:
         return False
-    shared = _markdownlint_config_text()
     if current == shared:
         return False
-    start, end, _ = _extract_balanced(text, "config")
     return _write_if_changed(path, text[:start] + shared + text[end:])
 
 
-def update_yamllint(root: Path) -> bool:
-    """Writes the shared YAML lint settings whole as the repository's own
-    .yamllint, wherever it takes the yamllint hook from this repository.
+def update_pyproject(root: Path, python_toml: dict[str, Any], decl: kits.Declaration) -> bool:
+    """Merges the Python kit's black and isort settings, and the django-api kit's mypy strictness,
+    into pyproject.toml, every other key staying as it is.
     """
-    if "yamllint" not in _shared_hook_ids(root):
-        return False
-    shared = (_bundled_settings_dir() / "yamllint.yaml").read_text()
-    return _write_if_changed(root / ".yamllint", shared)
-
-
-def update_editorconfig(root: Path) -> bool:
-    """Writes the shared editor settings whole as the repository's own
-    .editorconfig, wherever it takes the end-of-file-fixer or
-    trailing-whitespace hook from this repository.
-    """
-    if not {"end-of-file-fixer", "trailing-whitespace"} & _shared_hook_ids(root):
-        return False
-    shared = (_bundled_settings_dir() / "editorconfig").read_text()
-    return _write_if_changed(root / ".editorconfig", shared)
-
-
-def update_pyproject(root: Path, python_toml: dict[str, Any]) -> bool:
     path = root / "pyproject.toml"
     if not path.exists():
         return False
-    hook_ids = _shared_hook_ids(root)
     tool = python_toml.get("tool", {})
     text = path.read_text()
-    if "black" in hook_ids:
+    if "python" in decl.kits:
         text = _set_toml_keys(
             text, "tool.black", {k: tool["black"][k] for k in BLACK_KEYS if k in tool.get("black", {})}
         )
-    if "isort" in hook_ids:
         text = _set_toml_keys(
             text, "tool.isort", {k: tool["isort"][k] for k in ISORT_KEYS if k in tool.get("isort", {})}
         )
-    if "django-mypy" in hook_ids:
+    if "django-api" in decl.kits:
         text = _set_toml_keys(text, "tool.mypy", {k: tool["mypy"][k] for k in MYPY_KEYS if k in tool.get("mypy", {})})
     return _write_if_changed(path, text)
 
 
 def update_setup_cfg(root: Path, python_toml: dict[str, Any]) -> bool:
+    """Merges the Python kit's flake8 settings into setup.cfg, which flake8 reads and pyproject cannot hold."""
     path = root / "setup.cfg"
-    if not path.exists():
-        return False
-    if "flake8" not in _shared_hook_ids(root):
-        return False
     flake8 = python_toml.get("tool", {}).get("flake8", {})
-    text = path.read_text()
-    text = _set_ini_keys(text, "flake8", {k: flake8[k] for k in FLAKE8_KEYS if k in flake8})
-    return _write_if_changed(path, text)
-
-
-_EXCLUDE_LINE_RE = re.compile(r"^exclude:[ \t]*(?P<value>.*?)[ \t]*$", re.MULTILINE)
-_QUOTED_RE = re.compile(r"""^(?P<scalar>'(?:[^']|'')*'|"(?:[^"\\]|\\.)*")(?P<comment>[ \t]+\#.*)?$""")
-_PLAIN_RE = re.compile(r"^(?P<scalar>.*?)(?P<comment>[ \t]+#.*)?$")
-
-
-def update_lint_excludes_kit(root: Path) -> bool:
-    """Makes .pre-commit-lint.yaml's top-level `exclude` cover `.productforge/`, whose files are
-    generated and are linted where they are written, adding the line when there is none and
-    widening the pattern when there is one — whatever it already excludes stays.
-    """
-    path = root / ".pre-commit-lint.yaml"
-    if not path.exists():
-        return False
-    text = path.read_text()
-    match = _EXCLUDE_LINE_RE.search(text)
-    if match is None:
-        lines = text.splitlines(keepends=True)
-        at = next((i for i, line in enumerate(lines) if line.strip() and not line.lstrip().startswith("#")), len(lines))
-        lines.insert(at, f"exclude: '{KIT_EXCLUDE}'\n")
-        return _write_if_changed(path, "".join(lines))
-
-    value = match.group("value")
-    if value[:1] in ("|", ">") or not value:
-        raise UpdateError(f"{path}: its `exclude` is a multi-line value; add {KIT_EXCLUDE} to it by hand")
-    quoted = _QUOTED_RE.match(value)
-    if quoted:
-        scalar, comment = quoted.group("scalar"), quoted.group("comment") or ""
-        quote = scalar[0]
-        body = scalar[1:-1]
-        pattern = body.replace("''", "'") if quote == "'" else re.sub(r"\\(.)", r"\1", body)
-        widened = body + "|" + (KIT_EXCLUDE if quote == "'" else KIT_EXCLUDE.replace("\\", "\\\\"))
-        new_value = f"{quote}{widened}{quote}{comment}"
-    else:
-        plain = _PLAIN_RE.match(value)
-        assert plain is not None  # _PLAIN_RE matches any string
-        pattern, comment = plain.group("scalar"), plain.group("comment") or ""
-        new_value = f"{pattern}|{KIT_EXCLUDE}{comment}"
-    try:
-        if re.search(pattern, f"{kits.KIT_DIR}/manifest"):
-            return False
-    except re.error as exc:
-        raise UpdateError(f"{path}: its `exclude` isn't a valid regular expression ({exc})") from exc
-    return _write_if_changed(path, text[: match.start("value")] + new_value + text[match.end("value") :])
-
-
-def update_kit_settings(root: Path, env: kits.ProductEnv) -> list[str]:
-    """The settings a kind takes at fixed paths: its git hook config, and for a web app the Flutter
-    version and the pubspec's Dart SDK constraint that goes with it.
-    """
-    settings = _bundled_settings_dir()
-    changed = []
-    if _write_if_changed(
-        root / ".pre-commit-config.yaml", (settings / f"pre-commit-config-{env.kind}.yaml").read_text()
-    ):
-        changed.append(".pre-commit-config.yaml")
-    if env.kind == "web":
-        if _write_if_changed(root / ".fvmrc", (settings / "fvmrc").read_text()):
-            changed.append(".fvmrc")
-        if update_pubspec_sdk(root):
-            changed.append("pubspec.yaml")
-    return changed
+    existed = path.exists()
+    text = _set_ini_keys(
+        path.read_text() if existed else "", "flake8", {k: flake8[k] for k in FLAKE8_KEYS if k in flake8}
+    )
+    return _write_if_changed(path, text if existed else text.lstrip("\n"))
 
 
 def update_pubspec_sdk(root: Path) -> bool:
@@ -537,49 +407,108 @@ def update_pubspec_sdk(root: Path) -> bool:
     return _write_if_changed(path, "".join(lines))
 
 
-def update_kit(root: Path) -> list[str]:
-    """Installs the kit a repository's productforge.env names, and what goes with it. Does nothing
-    in a repository without one.
+# ─── An earlier shape ─────────────────────────────────────────────────────
+
+_LEGACY_INCLUDES_RE = re.compile(
+    r"^include \.productforge/common\.mk\n(?:include \.productforge/(?:api|web)\.mk\n)?", re.MULTILINE
+)
+_LEGACY_UPDATE_RECIPE_RE = re.compile(
+    r"\nVERSION \?= latest\n\n## Bring this repository[^\n]*\nupdate-config:\n(?:\t[^\n]*\n)+"
+)
+
+
+def check_lint_config_locatable(root: Path) -> None:
+    """Refuses a .pre-commit-lint.yaml that names productforge-config where its block can't be located:
+    the block is removed, so it has to be found as `- repo:` on a line of its own.
     """
-    env = kits.read_env(root)
-    if env is None:
-        return []
-    changed = kits.install_kit(root, env)
-    changed += update_kit_settings(root, env)
-    if update_lint_excludes_kit(root):
-        changed.append(".pre-commit-lint.yaml")
-    return changed
+    path = root / ".pre-commit-lint.yaml"
+    if not path.is_file():
+        return
+    for line in path.read_text().splitlines():
+        if HOOK_SOURCE in line and not line.lstrip().startswith("#") and not _HOOK_REPO_LINE_RE.match(line):
+            raise UpdateError(
+                f"{path}: names productforge-config in flow style, so its block can't be located: "
+                "write it as a block list, or remove it by hand (the kits supply those hooks)"
+            )
+
+
+def migrate_lint_config(root: Path) -> bool:
+    """Removes the productforge-config block from an earlier .pre-commit-lint.yaml, with the comment
+    lines right above it: the kits supply those hooks now. The file goes when no other repository is left in it.
+    """
+    path = root / ".pre-commit-lint.yaml"
+    if not path.is_file():
+        return False
+    text = path.read_text()
+    match = _HOOK_REPO_LINE_RE.search(text)
+    if match is None:
+        return False
+    tail = text[match.end() :]
+    next_repo = _ANY_REPO_LINE_RE.search(tail)
+    end = match.end() + next_repo.start() if next_repo else len(text)
+    start = match.start()
+    lines_before = text[:start].splitlines(keepends=True)
+    while lines_before and lines_before[-1].lstrip().startswith("#"):
+        lines_before.pop()
+    before = "".join(lines_before)
+    after = text[end:]
+    separator = "\n" if before.rstrip().endswith("repos:") else "\n\n"
+    remaining = before.rstrip("\n") + (separator + after.lstrip("\n") if after.strip() else "\n")
+    if not _ANY_REPO_LINE_RE.search(remaining):
+        return _files.remove(path)
+    return _write_if_changed(path, remaining)
+
+
+def migrate_makefile(root: Path) -> bool:
+    """Moves an earlier Makefile's includes to `.productforge/*.mk`, and drops its own copy of the
+    update-config recipe, which common.mk now carries.
+    """
+    path = root / "Makefile"
+    if not path.is_file():
+        return False
+    text = path.read_text()
+    new_text, count = _LEGACY_INCLUDES_RE.subn("include $(sort $(wildcard .productforge/*.mk))\n", text)
+    if count:
+        new_text = _LEGACY_UPDATE_RECIPE_RE.sub("", new_text)
+    return _write_if_changed(path, new_text)
 
 
 def update(root: Path, version: str, check: bool = False) -> list[str]:
-    """Bring the repository at `root` up to `version`. Returns the names
-    of whatever it actually changed, for reporting; changes nothing when
-    the repository is already at that version and those settings. With
-    `check`, changes nothing at all and returns what it would have.
+    """Bring the repository at `root` up to `version`: write the files of every kit its declaration
+    names, remove what a dropped kit left, and move its workflow refs. Returns the names of whatever
+    it actually changed, for reporting. With `check`, changes nothing at all and returns what it would have.
     """
     if check:
         with _files.check_only():
             return update(root, version)
+    decl = kits.read_env(root)
+    if decl is None:
+        raise kits.EnvError(
+            f"{root / kits.ENV_FILE} not found: a repository declares the kits it takes there (PF_KITS)"
+        )
+    check_lint_config_locatable(root)
     python_toml = _load_python_toml()
     changed: list[str] = []
-    # First, so a kit's exclude is settled before this release's other changes to the same file.
-    for name in update_kit(root):
-        if name not in changed:
+
+    def note(name: str, did: bool) -> None:
+        if did and name not in changed:
             changed.append(name)
-    if update_pre_commit_lint(root, version) and ".pre-commit-lint.yaml" not in changed:
-        changed.append(".pre-commit-lint.yaml")
-    if update_workflows(root, version):
-        changed.append(".github/workflows/*.yml")
-    if update_markdownlint(root):
-        changed.append(".markdownlint-cli2.jsonc")
-    if update_yamllint(root):
-        changed.append(".yamllint")
-    if update_editorconfig(root):
-        changed.append(".editorconfig")
-    if update_pyproject(root, python_toml):
-        changed.append("pyproject.toml")
-    if update_setup_cfg(root, python_toml):
-        changed.append("setup.cfg")
+
+    if decl.legacy:
+        note(kits.ENV_FILE, kits.rewrite_legacy_kind(root, decl))
+    for name in kits.install_kits(root, decl, version):
+        note(name, True)
+    note(".pre-commit-lint.yaml", migrate_lint_config(root))
+    note("Makefile", migrate_makefile(root))
+    note(".github/workflows/*.yml", update_workflows(root, version))
+    note(".markdownlint-cli2.jsonc", update_markdownlint(root))
+    if "python" in decl.kits:
+        note("pyproject.toml", update_pyproject(root, python_toml, decl))
+        note("setup.cfg", update_setup_cfg(root, python_toml))
+    elif "django-api" in decl.kits:
+        note("pyproject.toml", update_pyproject(root, python_toml, decl))
+    if "flutter-web" in decl.kits:
+        note("pubspec.yaml", update_pubspec_sdk(root))
     return changed
 
 
@@ -591,7 +520,8 @@ def _build_parser() -> argparse.ArgumentParser:
     update_parser.add_argument(
         "--version",
         default=None,
-        help="The release to move to, e.g. v1.0.0 (default, or 'latest': the newest release tag).",
+        help="The release to move to: a tag such as v1.0.0 (or v1.0.0-rc.1), or a 40-character commit SHA. "
+        "Default, or 'latest': the newest release tag; with --check, the release the repository records.",
     )
     update_parser.add_argument(
         "--path",
@@ -659,16 +589,13 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def _main_update(args: argparse.Namespace) -> int:
     root = Path(args.path).resolve()
+    failure = 2 if args.check else 1
     try:
-        version = resolve_version(args.version)
-    except InvalidVersion as exc:
-        print(f"productforge-config: {exc}", file=sys.stderr)
-        return 2 if args.check else 1
-    try:
+        version = _update_version(root, args)
         changed = update(root, version, check=args.check)
-    except (UpdateError, kits.EnvError) as exc:
+    except (InvalidVersion, UpdateError, kits.EnvError) as exc:
         print(f"productforge-config: {exc}", file=sys.stderr)
-        return 2 if args.check else 1
+        return failure
     if args.check:
         if not changed:
             print(f"productforge-config {version}: no drift")
@@ -682,17 +609,33 @@ def _main_update(args: argparse.Namespace) -> int:
     return 0
 
 
+def _update_version(root: Path, args: argparse.Namespace) -> str:
+    """The version to update to. `--check` given none checks against the release recorded in the
+    repository, so a newer release never counts as drift; `latest` asks for the newest one.
+    """
+    if args.check and args.version is None:
+        recorded = kits.release_record(root)
+        if recorded is None:
+            raise UpdateError(
+                f"--check with no --version needs the release recorded in {root / kits.RELEASE}, and there is none"
+            )
+        return resolve_version(recorded)
+    return resolve_version(args.version)
+
+
 def _main_init(args: argparse.Namespace) -> int:
     root = Path(args.path).resolve()
     try:
-        env = kits.validate(args.kind, args.slot, args.name)
+        decl = kits.for_kind(args.kind, args.slot, args.name)
         version = resolve_version(args.version)
-        changed = scaffold.init(root, env, version, args.old_name)
+        changed = scaffold.init(root, decl, version, args.old_name)
         changed += update(root, version)
     except (InvalidVersion, UpdateError, kits.EnvError, scaffold.InitError) as exc:
         print(f"productforge-config: {exc}", file=sys.stderr)
         return 1
-    print(f"productforge-config {version}: initialised {env.name} ({env.kind}, slot {env.slot}): {', '.join(changed)}")
+    print(
+        f"productforge-config {version}: initialised {decl.name} ({args.kind}, slot {decl.slot}): {', '.join(changed)}"
+    )
     return 0
 
 

@@ -246,14 +246,30 @@ def test_make_refuses_a_restricted_slot_in_the_repository(fixture: str, request:
 
 
 def test_lint_and_install_run_pre_commit_through_uv(api: Path) -> None:
-    assert "uv run pre-commit run --all-files --config .pre-commit-lint.yaml" in _make(api, "lint")
+    lint = _make(api, "lint")
+    assert "uv run pre-commit run --all-files --config .productforge/pre-commit.yaml" in lint
+    assert "uv run pre-commit run --all-files --config .pre-commit-lint.yaml" in lint  # the fixture has its own
     assert "uv sync --dev" in _make(api, "install")
     assert "uv run pre-commit install" in _make(api, "setup-hooks")
 
 
-def test_the_makefile_keeps_its_own_update_config(api: Path) -> None:
-    out = _make(api, "update-config", "VERSION=v1.0.0")
-    assert "uvx --from git+https://github.com/andrew-organization/productforge-config@$version" in out
+def test_lint_runs_only_the_kits_hooks_when_the_repository_has_none_of_its_own(web: Path) -> None:
+    lint = _make(web, "lint")
+    assert "--config .productforge/pre-commit.yaml" in lint
+    assert ".pre-commit-lint.yaml" not in lint
+
+
+def test_update_config_takes_a_tag_or_a_commit_sha(api: Path) -> None:
+    for version in ("v1.0.0", "0123456789abcdef0123456789abcdef01234567"):
+        out = _make(api, "update-config", f"VERSION={version}")
+        assert f"uvx --from git+https://github.com/andrew-organization/productforge-config@{version}" in out
+        assert f"productforge-config update --version {version}" in out
+
+
+def test_check_config_checks_at_the_recorded_release(api: Path) -> None:
+    out = _make(api, "check-config")
+    assert "update --check --version $release" in out
+    assert ".productforge/release" in out
 
 
 # ─── Docker Compose ───────────────────────────────────────────────────────
@@ -508,7 +524,7 @@ def test_web_mobile_mode_needs_a_lan_ip(web: Path, target: str) -> None:
 
 
 def test_make_refuses_a_name_that_is_not_snake_case(api: Path) -> None:
-    (api / "productforge.env").write_text("PF_KIND=api\nPF_SLOT=3\nPF_NAME=Not-Snake\n")
+    (api / "productforge.env").write_text("PF_KITS=python django-api\nPF_SLOT=3\nPF_NAME=Not-Snake\n")
     result = run_make(api, "-n", "test")
     assert result.returncode != 0
     assert "PF_NAME must be lower-case" in result.stderr

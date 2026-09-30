@@ -2,20 +2,6 @@ default_stages: [pre-commit]
 fail_fast: false
 
 repos:
-  - repo: https://github.com/andrew-organization/productforge-config
-    rev: v0.9.0
-    hooks:
-      - id: trailing-whitespace
-        types: [text]
-      - id: end-of-file-fixer
-        types: [text]
-      - id: markdownlint
-        args: [--fix]
-      - id: pyupgrade
-      - id: isort
-      - id: black
-      - id: flake8
-
   - repo: local
     hooks:
       - id: fixture-own-check

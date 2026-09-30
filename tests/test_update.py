@@ -23,26 +23,6 @@ def repo(tmp_path: Path) -> Path:
     return dest
 
 
-def test_moves_the_hook_rev(repo: Path) -> None:
-    cli.update(repo, VERSION)
-    text = (repo / ".pre-commit-lint.yaml").read_text()
-    assert f"rev: {VERSION}" in text
-    assert "v0.9.0" not in text
-
-
-def test_keeps_the_repos_own_hook(repo: Path) -> None:
-    before = (repo / ".pre-commit-lint.yaml").read_text()
-    cli.update(repo, VERSION)
-    after = (repo / ".pre-commit-lint.yaml").read_text()
-    assert "fixture-own-check" in after
-    # Only the rev line should differ.
-    before_lines = before.splitlines()
-    after_lines = after.splitlines()
-    assert len(before_lines) == len(after_lines)
-    differing = [i for i, (b, a) in enumerate(zip(before_lines, after_lines)) if b != a]
-    assert differing == [before_lines.index("    rev: v0.9.0")]
-
-
 def test_moves_the_action_ref(repo: Path) -> None:
     cli.update(repo, VERSION)
     text = (repo / ".github" / "workflows" / "ci.yml").read_text()
@@ -95,80 +75,71 @@ def test_rewrites_flake8_keeping_repo_own_exclude(repo: Path) -> None:
 def test_reports_what_it_changed(repo: Path) -> None:
     changed = cli.update(repo, VERSION)
     assert set(changed) == {
-        ".pre-commit-lint.yaml",
         ".github/workflows/*.yml",
         ".markdownlint-cli2.jsonc",
         "pyproject.toml",
         "setup.cfg",
         ".editorconfig",
+        ".yamllint",
+        ".productforge/common.mk",
+        ".productforge/python.mk",
+        ".productforge/pre-commit.yaml",
+        ".productforge/release",
+        ".productforge/manifest",
     }
+
+
+def test_pins_the_hooks_to_the_release(repo: Path) -> None:
+    cli.update(repo, VERSION)
+    text = (repo / ".productforge" / "pre-commit.yaml").read_text()
+    assert f"    rev: {VERSION}\n" in text
+    assert (repo / ".productforge" / "release").read_text() == f"{VERSION}\n"
+
+
+def test_main_runs_end_to_end(repo: Path) -> None:
+    assert cli.main(["update", "--version", VERSION, "--path", str(repo)]) == 0
+    assert f"rev: {VERSION}" in (repo / ".productforge" / "pre-commit.yaml").read_text()
+
+
+def test_writes_the_shared_yamllint_and_editorconfig_whole_with_the_generated_header(repo: Path) -> None:
+    (repo / ".yamllint").write_text("extends: relaxed\n")
+    cli.update(repo, VERSION)
+    settings = Path(__file__).parent.parent / "settings"
+    assert (repo / ".yamllint").read_text().endswith((settings / "yamllint.yaml").read_text())
+    assert (repo / ".editorconfig").read_text().endswith((settings / "editorconfig").read_text())
+    assert "Generated: change it in productforge-config" in (repo / ".yamllint").read_text()
+
+
+def test_leaves_pyproject_and_setup_cfg_alone_without_the_python_kit(repo: Path) -> None:
+    (repo / "productforge.env").write_text("PF_KITS=\n")
+    before_pyproject = (repo / "pyproject.toml").read_text()
+    before_setup_cfg = (repo / "setup.cfg").read_text()
+    changed = cli.update(repo, VERSION)
+    assert (repo / "pyproject.toml").read_text() == before_pyproject
+    assert (repo / "setup.cfg").read_text() == before_setup_cfg
+    assert not {"pyproject.toml", "setup.cfg"} & set(changed)
+    assert not (repo / ".productforge" / "python.mk").exists()
+
+
+def test_a_repository_with_no_python_files_gets_a_flake8_file_and_no_pyproject(tmp_path: Path) -> None:
+    repo = tmp_path / "no_python_repo"
+    repo.mkdir()
+    (repo / "productforge.env").write_text("PF_KITS=python\n")
+    changed = cli.update(repo, VERSION)
+    assert not (repo / "pyproject.toml").exists()
+    assert (repo / "setup.cfg").read_text().startswith("[flake8]\n")
+    assert "setup.cfg" in changed
+
+
+def test_a_repository_with_no_declaration_is_refused(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    assert cli.main(["update", "--version", VERSION, "--path", str(tmp_path)]) == 1
+    assert "PF_KITS" in capsys.readouterr().err
+    assert not (tmp_path / ".productforge").exists()
 
 
 def test_running_it_again_changes_nothing(repo: Path) -> None:
     cli.update(repo, VERSION)
     assert cli.update(repo, VERSION) == []
-
-
-def test_main_runs_end_to_end(repo: Path) -> None:
-    exit_code = cli.main(["update", "--version", VERSION, "--path", str(repo)])
-    assert exit_code == 0
-    assert f"rev: {VERSION}" in (repo / ".pre-commit-lint.yaml").read_text()
-
-
-def test_no_python_files_left_untouched(tmp_path: Path) -> None:
-    """A repository with no Python at all — no pyproject.toml or setup.cfg
-    — is left exactly as it is; update() doesn't create either file.
-    """
-    repo = tmp_path / "no_python_repo"
-    repo.mkdir()
-    (repo / ".pre-commit-lint.yaml").write_text(
-        "repos:\n"
-        "  - repo: https://github.com/andrew-organization/productforge-config\n"
-        "    rev: v0.9.0\n"
-        "    hooks:\n"
-        "      - id: trailing-whitespace\n"
-        "      - id: markdownlint\n"
-    )
-
-    changed = cli.update(repo, VERSION)
-
-    assert not (repo / "pyproject.toml").exists()
-    assert not (repo / "setup.cfg").exists()
-    assert "pyproject.toml" not in changed
-    assert "setup.cfg" not in changed
-    # It still moved the hook rev — the absence of Python doesn't stop the
-    # rest of the update.
-    assert f"rev: {VERSION}" in (repo / ".pre-commit-lint.yaml").read_text()
-
-
-def test_leaves_pyproject_and_setup_cfg_alone_when_hooks_not_taken(repo: Path) -> None:
-    """A repository whose .pre-commit-lint.yaml takes only the non-Python
-    hooks from this repository's own block — no black, isort or flake8 —
-    keeps its pyproject.toml [tool.black]/[tool.isort] and setup.cfg
-    [flake8] exactly as they are: only a repository that actually runs
-    those hooks gets them rewritten.
-    """
-    lint_path = repo / ".pre-commit-lint.yaml"
-    stripped = re.sub(
-        r"\n[ \t]*-[ \t]*id:[ \t]*(black|isort|flake8)\b[^\n]*",
-        "",
-        lint_path.read_text(),
-    )
-    # Sanity check the fixture setup actually stripped something.
-    assert "id: black" not in stripped
-    assert "id: isort" not in stripped
-    assert "id: flake8" not in stripped
-    lint_path.write_text(stripped)
-
-    before_pyproject = (repo / "pyproject.toml").read_text()
-    before_setup_cfg = (repo / "setup.cfg").read_text()
-
-    changed = cli.update(repo, VERSION)
-
-    assert (repo / "pyproject.toml").read_text() == before_pyproject
-    assert (repo / "setup.cfg").read_text() == before_setup_cfg
-    assert "pyproject.toml" not in changed
-    assert "setup.cfg" not in changed
 
 
 def test_extract_balanced_skips_braces_in_strings_and_comments() -> None:
@@ -231,24 +202,22 @@ def test_resolve_version_none_or_latest_resolves_to_newest_tag(monkeypatch: pyte
 
 
 def test_resolve_version_never_writes_on_an_invalid_explicit_version(repo: Path) -> None:
-    before = (repo / ".pre-commit-lint.yaml").read_text()
     with pytest.raises(cli.InvalidVersion):
         cli.resolve_version("not-a-version")
-    assert (repo / ".pre-commit-lint.yaml").read_text() == before
+    assert not (repo / ".productforge").exists()
 
 
 def test_main_resolves_latest_when_version_omitted(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cli, "_latest_release_tag", lambda: "v3.0.0")
     exit_code = cli.main(["update", "--path", str(repo)])
     assert exit_code == 0
-    assert "rev: v3.0.0" in (repo / ".pre-commit-lint.yaml").read_text()
+    assert "rev: v3.0.0" in (repo / ".productforge" / "pre-commit.yaml").read_text()
 
 
 def test_main_refuses_an_invalid_version_before_writing_anything(repo: Path) -> None:
-    before = (repo / ".pre-commit-lint.yaml").read_text()
     exit_code = cli.main(["update", "--version", "not-a-version", "--path", str(repo)])
     assert exit_code == 1
-    assert (repo / ".pre-commit-lint.yaml").read_text() == before
+    assert not (repo / ".productforge").exists()
 
 
 def test_latest_release_tag_prefers_stable_over_prerelease() -> None:
@@ -269,27 +238,6 @@ def test_latest_release_tag_falls_back_to_prerelease_when_no_stable_exists() -> 
     stable, prerelease = cli._parse_release_tags(ls_remote_output)
     assert stable == {}
     assert prerelease[max(prerelease)] == "v1.0.0-rc.2"
-
-
-def test_rewrites_python_settings_when_hooks_are_listed_in_flow_style(repo: Path) -> None:
-    """A repository listing this repository's hooks in flow style, as the
-    README's own example does, still gets its Python settings rewritten.
-    """
-    lint_path = repo / ".pre-commit-lint.yaml"
-    text = lint_path.read_text()
-    ids = cli._shared_hook_ids(repo)
-    assert {"black", "isort", "flake8"} <= ids
-    block = re.search(r"([ \t]*)hooks:\n(?:\1[ \t]*-[ \t]*id:[^\n]*\n(?:\1[ \t]+[^\n-][^\n]*\n)*)+", text)
-    assert block is not None
-    indent = block.group(1)
-    flow = f"{indent}hooks: [" + ", ".join(f"{{id: {i}}}" for i in sorted(ids)) + "]\n"
-    lint_path.write_text(text[: block.start()] + flow + text[block.end() :])
-    assert cli._shared_hook_ids(repo) == ids
-
-    changed = cli.update(repo, VERSION)
-
-    assert "pyproject.toml" in changed
-    assert "setup.cfg" in changed
 
 
 def test_moves_a_quoted_action_ref_keeping_its_quotes(repo: Path) -> None:
@@ -313,67 +261,6 @@ def test_updates_a_section_whose_header_carries_a_comment_without_duplicating_it
     assert pyproject.read_text().count("[tool.black]") == 1
 
 
-def test_moves_a_rev_with_a_comment_line_between_it_and_its_repo(repo: Path) -> None:
-    lint = repo / ".pre-commit-lint.yaml"
-    text = lint.read_text()
-    commented = re.sub(
-        r"(repo:[ \t]*https://github.com/andrew-organization/productforge-config[^\n]*\n)", r"\1    # pinned\n", text
-    )
-    assert commented != text
-    lint.write_text(commented)
-
-    cli.update(repo, VERSION)
-
-    assert f"rev: {VERSION}" in lint.read_text()
-
-
-def test_refuses_a_repo_it_takes_hooks_from_but_whose_rev_it_cannot_find(repo: Path) -> None:
-    lint = repo / ".pre-commit-lint.yaml"
-    lint.write_text(re.sub(r"\n[ \t]*rev:[^\n]*", "", lint.read_text(), count=1))
-
-    with pytest.raises(cli.UpdateError):
-        cli.update(repo, VERSION)
-
-
-def test_writes_the_shared_yamllint_settings_where_the_hook_is_taken(repo: Path) -> None:
-    lint = repo / ".pre-commit-lint.yaml"
-    lint.write_text(lint.read_text().replace("      - id: flake8\n", "      - id: flake8\n      - id: yamllint\n"))
-    (repo / ".yamllint").write_text("extends: relaxed\n")
-
-    changed = cli.update(repo, VERSION)
-
-    shared = (Path(__file__).parent.parent / "settings" / "yamllint.yaml").read_text()
-    assert (repo / ".yamllint").read_text() == shared
-    assert ".yamllint" in changed
-    assert cli.update(repo, VERSION) == []
-
-
-def test_leaves_yamllint_alone_without_the_hook(repo: Path) -> None:
-    cli.update(repo, VERSION)
-    assert not (repo / ".yamllint").exists()
-
-
-def test_writes_the_shared_editorconfig_where_the_whitespace_hooks_are_taken(repo: Path) -> None:
-    changed = cli.update(repo, VERSION)
-
-    shared = (Path(__file__).parent.parent / "settings" / "editorconfig").read_text()
-    assert (repo / ".editorconfig").read_text() == shared
-    assert ".editorconfig" in changed
-    assert cli.update(repo, VERSION) == []
-
-
-def test_leaves_editorconfig_alone_without_the_whitespace_hooks(repo: Path) -> None:
-    lint = repo / ".pre-commit-lint.yaml"
-    text = lint.read_text()
-    for hook in ("trailing-whitespace", "end-of-file-fixer"):
-        text = re.sub(rf"\n[ \t]*- id: {hook}\n(?:[ \t]+[a-z_]+:[^\n]*\n)*", "\n", text)
-    lint.write_text(text)
-
-    cli.update(repo, VERSION)
-
-    assert not (repo / ".editorconfig").exists()
-
-
 def test_a_failing_ls_remote_is_a_clean_error_not_a_traceback(monkeypatch: pytest.MonkeyPatch) -> None:
     def offline(*args: object, **kwargs: object) -> None:
         raise cli.subprocess.CalledProcessError(128, "git", stderr="fatal: unable to access\n")
@@ -392,7 +279,7 @@ def test_a_missing_git_is_a_clean_error_too(monkeypatch: pytest.MonkeyPatch) -> 
         cli.resolve_version("latest")
 
 
-@pytest.mark.parametrize(("extra", "code"), [(["--check"], 2), ([], 1)])
+@pytest.mark.parametrize(("extra", "code"), [(["--check", "--version", "latest"], 2), ([], 1)])
 def test_main_exits_cleanly_when_the_latest_tag_cannot_be_resolved(
     repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], extra: list[str], code: int
 ) -> None:
