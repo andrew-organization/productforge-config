@@ -37,13 +37,13 @@ lock:
 ## path (optional): repo-relative path to a test file or directory.
 ## k (optional): pytest -k expression to match test names or keywords.
 test:
-	uv run pytest $(if $(path),$(path),api/tests) -v -m "not django_db" $(if $(k),-k "$(k)")
+	uv run pytest -n auto $(if $(path),$(path),api/tests) -v -m "not django_db" $(if $(k),-k "$(k)")
 
 ## Run DB integration tests against a disposable Postgres, and remove it after. Usage: make test-integration [path=<path>] [k=<keyword>]
 ## Uses its own Postgres container on this slot's test port, so it can run alongside the app.
 test-integration:
 	$(PF_COMPOSE_TEST) up -d --wait --remove-orphans postgres-test
-	$(PF_TEST_DB_ENV) uv run pytest $(if $(path),$(path),api/tests) -m django_db -v $(if $(k),-k "$(k)"); \
+	$(PF_TEST_DB_ENV) uv run pytest -n auto $(if $(path),$(path),api/tests) -m django_db -v $(if $(k),-k "$(k)"); \
 		status=$$?; $(PF_COMPOSE_TEST) down --remove-orphans; exit $$status
 
 ## Run DB integration tests against the test Postgres, started here and left running for the runner to discard (used in CI).

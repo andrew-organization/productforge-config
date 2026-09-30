@@ -4,11 +4,17 @@ on:
   # Every pull request, whatever it targets, so a PR stacked on another
   # gets the same checks as one targeting main.
   pull_request:
+  # And every merge to main: the caches that run saves belong to main's scope,
+  # which every pull request restores.
+  push:
+    branches:
+      - main
 
-# A new push to a pull request cancels the run it supersedes.
+# A new push to a pull request cancels the run it supersedes. A run on main is
+# never cancelled, since a cancelled run saves no cache.
 concurrency:
-  group: ci-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # One job, set up once, then every check in parallel on the same runner —

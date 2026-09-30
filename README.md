@@ -192,8 +192,8 @@ uvx --from git+https://github.com/andrew-organization/productforge-config@v1.0.0
 ```
 
 Validates the values first, then writes `productforge.env`, the thin
-`Makefile`, and the thin `.github/workflows/ci.yml` (`on: pull_request`, calling
-`ci-<kind>.yml@<tag>`), replacing a full `Makefile` or `ci.yml` already there,
+`Makefile`, and the thin `.github/workflows/ci.yml` (on every pull request and every
+push to `main`, calling `ci-<kind>.yml@<tag>`), replacing a full `Makefile` or `ci.yml` already there,
 and then runs `update`, so the kit is in place. Running it again with the same
 values changes nothing.
 
@@ -216,6 +216,13 @@ a repository's `ci.yml` is thin:
 ```yaml
 on:
   pull_request:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   ci:
@@ -223,6 +230,11 @@ jobs:
     permissions:
       contents: read
 ```
+
+The push trigger runs the workflow on `main` after every merge, so the caches it
+saves belong to main's scope, which every pull request restores; the concurrency
+group cancels a superseded pull-request run and never a run on `main`, since a
+cancelled run saves no cache.
 
 Each runs the make targets a developer runs: the API's `make lint`, `make
 check-migrations`, `make test` and `make test-integration-ci` (which starts the

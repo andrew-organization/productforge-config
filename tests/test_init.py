@@ -50,6 +50,9 @@ def test_writes_the_three_files_and_installs_the_kit(tmp_path: Path) -> None:
     ci = (tmp_path / ".github" / "workflows" / "ci.yml").read_text()
     assert f"uses: andrew-organization/productforge-config/.github/workflows/ci-api.yml@{VERSION}" in ci
     assert "pull_request:" in ci
+    assert "push:\n    branches:\n      - main" in ci
+    assert "group: ci-${{ github.event.pull_request.number || github.ref }}" in ci
+    assert "cancel-in-progress: ${{ github.event_name == 'pull_request' }}" in ci
 
 
 def test_the_read_back_values_are_the_ones_given(tmp_path: Path) -> None:
