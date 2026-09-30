@@ -36,8 +36,10 @@ repository is brought up to a release by one command, run in it.
   `settings/python.toml`, `settings/common.toml` — the markdownlint and yamllint
   rules, the Python version and the black, isort, flake8 and mypy settings, and
   the `pre-commit` floor. The Python version is stated once, in
-  `settings/python.toml`: `update` derives black's target, mypy's version and
-  `requires-python` from it, and `actions/setup` installs it.
+  `settings/python.toml`: `update` derives black's target, mypy's version,
+  `requires-python` and the `django-api` image's Python from it, and
+  `actions/setup` installs it. The line length is stated there once too, and
+  written as black's, isort's and flake8's.
   `update` writes them into each repository, as a real local copy, so editors
   read the same rules; a change here reaches every repository on its next
   update.

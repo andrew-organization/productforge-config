@@ -194,6 +194,10 @@ def _load_python_toml() -> dict[str, Any]:
     tool = settings.setdefault("tool", {})
     tool.setdefault("black", {})["target-version"] = [derived["black"]]
     tool.setdefault("mypy", {})["python_version"] = derived["mypy"]
+    line_length = settings["python"]["line-length"]
+    tool.setdefault("black", {})["line-length"] = line_length
+    tool.setdefault("isort", {})["line_length"] = line_length
+    tool.setdefault("flake8", {})["max-line-length"] = line_length
     settings["python"]["requires-python"] = derived["requires-python"]
     return settings
 

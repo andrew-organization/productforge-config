@@ -359,6 +359,9 @@ def kit_files(decl: Declaration, version: str) -> dict[str, str]:
         files[".pre-commit-config.yaml"] = (settings / f"pre-commit-config-{decl.product_kit}.yaml").read_text()
     files[".editorconfig"] = (settings / "editorconfig").read_text()
     files[".yamllint"] = (settings / "yamllint.yaml").read_text()
+    dockerfile = f"{KIT_DIR}/Dockerfile"
+    if dockerfile in files:  # the image's Python is the stated one
+        files[dockerfile] = files[dockerfile].replace("@PYTHON_VERSION@", python_version())
     files[PYTHON_VERSION_FILE] = f"{python_version()}\n"
     files[PRE_COMMIT] = pre_commit_text(decl, version)
     bare = {PRE_COMMIT, PYTHON_VERSION_FILE}  # one bare line, or a file a tool reads without comments

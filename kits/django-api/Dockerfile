@@ -1,4 +1,5 @@
-FROM python:3.14-slim-bookworm
+# The Python is settings/python.toml's [python] version, written in when `update` installs this file.
+FROM python:@PYTHON_VERSION@-slim-bookworm
 
 COPY --from=ghcr.io/astral-sh/uv:0.11.32 /uv /uvx /bin/
 

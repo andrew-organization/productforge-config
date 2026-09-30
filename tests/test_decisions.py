@@ -22,11 +22,14 @@ SETTINGS = REPO_ROOT / "settings"
 def settings_with_python(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Point update at a copy of settings/ whose Python version is the one given."""
 
-    def use(version: str) -> None:
+    def use(version: str, line_length: int | None = None) -> None:
         copy = tmp_path / "settings"
         shutil.copytree(SETTINGS, copy, dirs_exist_ok=True)
         text = (copy / "python.toml").read_text()
-        (copy / "python.toml").write_text(re.sub(r'^version = ".*"$', f'version = "{version}"', text, flags=re.M))
+        text = re.sub(r'^version = ".*"$', f'version = "{version}"', text, flags=re.M)
+        if line_length is not None:
+            text = re.sub(r"^line-length = .*$", f"line-length = {line_length}", text, flags=re.M)
+        (copy / "python.toml").write_text(text)
         monkeypatch.setattr(cli, "_bundled_settings_dir", lambda: copy)
         monkeypatch.setattr(kits, "bundled_settings_dir", lambda: copy)
 
@@ -51,7 +54,7 @@ def test_a_version_that_is_not_major_dot_minor_is_refused(bad: str) -> None:
 def test_the_settings_state_the_version_and_no_derived_form_of_it() -> None:
     settings = tomllib.loads((SETTINGS / "python.toml").read_text())
     assert settings["python"]["version"] == _state()
-    assert "target-version" not in settings["tool"]["black"]
+    assert "target-version" not in settings["tool"].get("black", {})
     assert "python_version" not in settings["tool"]["mypy"]
 
 
@@ -112,6 +115,44 @@ def test_check_fails_on_a_hand_edited_python_version_file(web_repo: Path, capsys
     assert ".python-version" in capsys.readouterr().out
     cli.update(web_repo, VERSION)
     assert _check(web_repo) == 0
+
+
+def _line_length() -> int:
+    return int(tomllib.loads((SETTINGS / "python.toml").read_text())["python"]["line-length"])
+
+
+def test_the_settings_state_the_line_length_once() -> None:
+    tool = tomllib.loads((SETTINGS / "python.toml").read_text())["tool"]
+    assert "line-length" not in tool.get("black", {})
+    assert "line_length" not in tool["isort"]
+    assert "max-line-length" not in tool["flake8"]
+
+
+def test_the_one_line_length_reaches_black_isort_and_flake8(api_repo: Path) -> None:
+    cli.update(api_repo, VERSION)
+    n = _line_length()
+    assert f"line-length = {n}" in (api_repo / "pyproject.toml").read_text()
+    assert f"line_length = {n}" in (api_repo / "pyproject.toml").read_text()
+    assert f"max-line-length = {n}" in (api_repo / "setup.cfg").read_text()
+
+
+def test_changing_the_line_length_moves_all_three(api_repo: Path, settings_with_python) -> None:
+    settings_with_python("3.14", line_length=100)
+    cli.update(api_repo, VERSION)
+    assert "line-length = 100" in (api_repo / "pyproject.toml").read_text()
+    assert "line_length = 100" in (api_repo / "pyproject.toml").read_text()
+    assert "max-line-length = 100" in (api_repo / "setup.cfg").read_text()
+    assert "120" not in (api_repo / "pyproject.toml").read_text() + (api_repo / "setup.cfg").read_text()
+
+
+def test_the_images_python_is_the_stated_version(api_repo: Path, settings_with_python) -> None:
+    cli.update(api_repo, VERSION)
+    assert f"FROM python:{_state()}-slim-bookworm" in (api_repo / ".productforge" / "Dockerfile").read_text()
+    settings_with_python("3.15")
+    cli.update(api_repo, VERSION)
+    dockerfile = (api_repo / ".productforge" / "Dockerfile").read_text()
+    assert "FROM python:3.15-slim-bookworm" in dockerfile
+    assert "@PYTHON_VERSION@" not in dockerfile and "3.14" not in dockerfile
 
 
 def test_the_setup_action_reads_the_same_file_the_update_reads() -> None:
