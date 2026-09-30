@@ -442,6 +442,42 @@ def check_lint_config_locatable(root: Path) -> None:
             )
 
 
+_REQUIREMENT_RE = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*([^;]*)")
+
+
+def _dev_requirements(pyproject: dict[str, Any]) -> list[str]:
+    """Every requirement string in a pyproject.toml's development dependency lists: its dependency
+    groups, uv's `dev-dependencies`, and its optional-dependency extras.
+    """
+    groups = pyproject.get("dependency-groups", {}).values()
+    uv_dev = pyproject.get("tool", {}).get("uv", {}).get("dev-dependencies", [])
+    extras = pyproject.get("project", {}).get("optional-dependencies", {}).values()
+    return [r for entries in (*groups, uv_dev, *extras) for r in entries if isinstance(r, str)]
+
+
+def check_pre_commit_unversioned(root: Path) -> None:
+    """Refuses a pyproject.toml that gives `pre-commit` a version: the floor is stated once, in
+    settings/common.toml, and a repository declares the dependency bare.
+    """
+    path = root / "pyproject.toml"
+    if not path.is_file():
+        return
+    try:
+        pyproject = tomllib.loads(path.read_text())
+    except tomllib.TOMLDecodeError:
+        return
+    for requirement in _dev_requirements(pyproject):
+        match = _REQUIREMENT_RE.match(requirement)
+        if match is None or re.sub(r"[-_.]+", "-", match.group(1)).lower() != "pre-commit":
+            continue
+        if match.group(2).strip():
+            raise UpdateError(
+                f"{path}: the dev dependency {requirement!r} versions pre-commit; declare it as plain "
+                f"'pre-commit', because the floor ({kits.minimum_pre_commit_version()}) is stated once, "
+                "in productforge-config's settings/common.toml, and written into the generated lint configuration"
+            )
+
+
 def migrate_lint_config(root: Path) -> bool:
     """Removes the productforge-config block from an earlier .pre-commit-lint.yaml, with the comment
     lines right above it: the kits supply those hooks now. The file goes when no other repository is left in it.
@@ -497,6 +533,7 @@ def update(root: Path, version: str, check: bool = False) -> list[str]:
             f"{root / kits.ENV_FILE} not found: a repository declares the kits it takes there (PF_KITS)"
         )
     check_lint_config_locatable(root)
+    check_pre_commit_unversioned(root)
     python_toml = _load_python_toml()
     changed: list[str] = []
 

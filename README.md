@@ -137,12 +137,16 @@ where its syntax allows one:
 | Kit | Files |
 | --- | --- |
 | `common` (always) | `common.mk` (`install`, `lint`, `setup-hooks`, `clean`, `update-config`, `check-config`), `pre-commit.yaml` (the hooks of the kits taken, at the release), `release` (the release record), and at the root `.editorconfig`, `.yamllint`; the `"config"` of `.markdownlint-cli2.jsonc` |
-| `python` | `python.mk` (`PYTEST`, parallel by default, and `test` where `django-api` is not taken); the black and isort keys of `pyproject.toml` and the flake8 keys of `setup.cfg` |
+| `python` | `python.mk` (`PYTEST`, parallel by default, `test` where `django-api` is not taken, `PYTHONDONTWRITEBYTECODE`, and `clean` of `.venv` and every `__pycache__`); the black and isort keys of `pyproject.toml` and the flake8 keys of `setup.cfg` |
 | `shell` | the `shellcheck` hook |
 | `django-api` | `django-api.mk` (`test`, `test-integration`, `test-integration-ci`, `check-migrations`, `build`, `up`, `down`, `logs`, `shell`, `lock`, `all`), `Dockerfile`, `entrypoint`, `compose.yml`, `compose.test.yml`, a root `.dockerignore` and `.pre-commit-config.yaml`; the `django-mypy` hook and `[tool.mypy]` |
 | `flutter-web` | `flutter-web.mk` (`l10n`, `generate`, `identity`, `check-identity-regeneration`, `check-generated`, `test`, `build`, `up`, `debug`, `down`, `serve-build`, `all`), `generate_identity.py`, `check_identity_regeneration.py`, `serve_web_build.py`, `analysis_options.yaml`, and at the root `.pre-commit-config.yaml` and `.fvmrc`; the pubspec's `environment.sdk` |
 | product kits | `product.mk` (the `PF_` validation, the slot's ports, `ports`) and `CLAUDE.md` |
 | `release` | nothing written yet; the repository calls the shared release workflow |
+
+A repository declares `pre-commit` as a plain dev dependency: `update` (and so
+`update --check`) fails on a `pyproject.toml` that gives it a version, because the floor is
+stated once, in `settings/common.toml`.
 
 `make lint` runs `.productforge/pre-commit.yaml` and then the repository's own
 `.pre-commit-lint.yaml` when it has one, both always, failing when either does;

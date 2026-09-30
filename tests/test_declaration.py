@@ -126,8 +126,9 @@ _API = "PF_SLOT=3\nPF_NAME=demo\n"
         ("PF_KITS=django-api\nPF_SLOT=3\n", "PF_NAME is not set"),
         ("PF_KITS=django-api\nPF_NAME=demo\n", "PF_SLOT"),
         ("PF_KITS=flutter-web\nPF_SLOT=x\nPF_NAME=demo\n", "PF_SLOT"),
-        ("PF_KITS=python\nPF_SLOT=3\n", "PF_SLOT only belong with a product kit"),
-        ("PF_KITS=python\nPF_NAME=demo\n", "PF_NAME only belong with a product kit"),
+        ("PF_KITS=python\nPF_SLOT=3\n", "PF_SLOT only belongs with a product kit"),
+        ("PF_KITS=python\nPF_NAME=demo\n", "PF_NAME only belongs with a product kit"),
+        ("PF_KITS=python\nPF_SLOT=3\nPF_NAME=demo\n", "PF_SLOT, PF_NAME only belong with a product kit"),
         ("PF_KITS=python\nPF_DJANGO_PROJECT=core\n", "PF_DJANGO_PROJECT"),
         ("PF_KITS=python\nPF_POSTGRES_DB=shop\n", "PF_POSTGRES_DB"),
         ("PF_KITS=python\nPF_LINT_EXCLUDE=(\n", "PF_LINT_EXCLUDE"),
@@ -330,3 +331,30 @@ def test_a_release_moves_only_what_the_kits_write(api_repo: Path) -> None:
     shutil.rmtree(api_repo / ".productforge")
     cli.update(api_repo, VERSION)
     assert _tree(api_repo) == tree
+
+
+# ─── The pre-commit floor is stated in config alone ───────────────────────
+
+
+def _with_dev_dependency(repo: Path, requirement: str) -> None:
+    path = repo / "pyproject.toml"
+    path.write_text(path.read_text() + f'\n[dependency-groups]\ndev = ["{requirement}"]\n')
+
+
+@pytest.mark.parametrize("requirement", ["pre-commit>=4.6", "pre_commit==4.6.0", "Pre-Commit[x] ~= 4.6"])
+def test_a_versioned_pre_commit_dev_dependency_fails_update_and_its_check(
+    api_repo: Path, requirement: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _with_dev_dependency(api_repo, requirement)
+    before = _tree(api_repo)
+    for extra in ([], ["--check"]):
+        assert cli.main(["update", "--path", str(api_repo), "--version", VERSION, *extra]) != 0
+        err = capsys.readouterr().err
+        assert "versions pre-commit" in err and "settings/common.toml" in err
+    assert _tree(api_repo) == before
+
+
+@pytest.mark.parametrize("requirement", ["pre-commit", "pre-commit-hooks>=6.0", "pre-commit; python_version>'3'"])
+def test_a_bare_pre_commit_dev_dependency_is_left_alone(api_repo: Path, requirement: str) -> None:
+    _with_dev_dependency(api_repo, requirement)
+    assert cli.main(["update", "--path", str(api_repo), "--version", VERSION]) == 0

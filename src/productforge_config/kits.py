@@ -170,8 +170,9 @@ def validate(
             if value
         ]
         if given:
+            verb = "belongs" if len(given) == 1 else "belong"
             raise EnvError(
-                f"{', '.join(given)} only belong with a product kit ({' or '.join(PRODUCT_KITS)}), and none is taken"
+                f"{', '.join(given)} only {verb} with a product kit ({' or '.join(PRODUCT_KITS)}), and none is taken"
             )
         slot_value = None
     else:

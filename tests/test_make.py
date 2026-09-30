@@ -142,6 +142,23 @@ def test_clean_removes_python_caches(api: Path) -> None:
     assert '-name "__pycache__"' in _make(api, "clean")
 
 
+def _exported_env_value(repo: Path, name: str) -> str | None:
+    """The value make exports to a recipe under `name`, from a real make run."""
+    (repo / "env.mk").write_text("include Makefile\nprint-env:\n\t@env\n")
+    result = run_make(repo, "-f", "env.mk", "print-env")
+    (repo / "env.mk").unlink()
+    assert result.returncode == 0, result.stderr
+    return dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line).get(name)
+
+
+def test_the_python_kit_keeps_bytecode_out_and_cleans_the_virtualenv_and_every_pycache(api: Path) -> None:
+    assert _exported_env_value(api, "PYTHONDONTWRITEBYTECODE") == "1"
+    out = _make(api, "clean")
+    assert "rm -rf .venv" in out
+    assert "find . -type d -name __pycache__" in out
+    assert "rm -rf .pytest_cache .mypy_cache" in out  # and what every repository cleans
+
+
 # ─── web.mk ───────────────────────────────────────────────────────────────
 
 FLUTTER = r"(fvm )?flutter"
@@ -264,6 +281,40 @@ def test_update_config_takes_a_tag_or_a_commit_sha(api: Path) -> None:
         out = _make(api, "update-config", f"VERSION={version}")
         assert f"uvx --from git+https://github.com/andrew-organization/productforge-config@{version}" in out
         assert f"productforge-config update --version {version}" in out
+
+
+def _with_fake_git(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tags: list[str]) -> None:
+    """Put a `git` first on PATH whose `ls-remote --tags` lists exactly `tags`."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    listing = "".join(f"0123456789abcdef0123456789abcdef01234567\\trefs/tags/{tag}\\n" for tag in tags)
+    git = bin_dir / "git"
+    git.write_text(f"#!/bin/sh\nprintf '{listing}'\n")
+    git.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+
+
+@pytest.mark.parametrize(
+    ("tags", "expected"),
+    [
+        (["v1.9.0", "v1.10.0", "v1.11.0-rc.1"], "v1.10.0"),  # stable wins over a newer -rc.N
+        (["v1.0.0-rc.2", "v1.0.0-rc.10", "v0.9.0-rc.11", "nonsense"], "v1.0.0-rc.10"),  # no stable: the newest -rc.N
+    ],
+)
+def test_update_config_defaults_to_the_newest_stable_tag_else_the_newest_rc(
+    api: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tags: list[str], expected: str
+) -> None:
+    _with_fake_git(tmp_path, monkeypatch, tags)
+    assert f"productforge-config update --version {expected}" in _make(api, "update-config")
+
+
+def test_update_config_stops_when_there_is_no_release_tag_at_all(
+    api: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _with_fake_git(tmp_path, monkeypatch, ["not-a-release"])
+    result = run_make(api, "update-config")
+    assert result.returncode != 0
+    assert "no productforge-config release tag found" in result.stderr
 
 
 def test_check_config_checks_at_the_recorded_release(api: Path) -> None:

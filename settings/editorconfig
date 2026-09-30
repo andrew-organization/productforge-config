@@ -1,5 +1,3 @@
-# Written into every ProductForge repository by `productforge-config update`,
-# from productforge-config's settings/editorconfig — change it there, not here.
 # Editors that read EditorConfig save every file the way the shared
 # end-of-file-fixer and trailing-whitespace hooks would leave it.
 root = true
