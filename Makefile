@@ -10,9 +10,6 @@ include $(sort $(wildcard .productforge/*.mk))
 # reads straight from src/ instead, missing settings/ entirely.
 export UV_NO_EDITABLE := 1
 
-# No bytecode beside the sources: the tests copy fixtures and rebuild the package often.
-export PYTHONDONTWRITEBYTECODE := 1
-
 # The kits' makefiles give `test` its recipe (parallel pytest); it is named here for checkmake, which reads this file alone.
 test:
 
@@ -23,6 +20,6 @@ all: lint test
 
 clean: clean-config
 
-## Remove the virtualenv and the build caches
+## Remove the build outputs (the Python kit's clean removes the virtualenv)
 clean-config:
-	rm -rf .venv dist build
+	rm -rf dist build

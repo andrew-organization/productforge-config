@@ -53,8 +53,8 @@ clean:
 
 # ─── productforge-config ────────────────────────────────────────────────────
 
-# The newest stable release tag, looked up only when a recipe reads it.
-VERSION ?= $(shell git ls-remote --tags --refs $(PF_CONFIG_URL) | sed 's,.*refs/tags/,,' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$$' | sort -V | tail -n1)
+# The newest stable release tag, or the newest -rc.N when no stable release exists yet; looked up only when a recipe reads it.
+VERSION ?= $(shell tags=$$(git ls-remote --tags --refs $(PF_CONFIG_URL) 2>/dev/null | sed 's,.*refs/tags/,,'); v=$$(echo "$$tags" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$$' | sort -V | tail -n1); [ -n "$$v" ] || v=$$(echo "$$tags" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$$' | sort -V | tail -n1); echo "$$v")
 
 ## Bring this repository up to a productforge-config release: its kits, hooks, CI and shared settings.
 ## Usage: make update-config [VERSION=<tag or commit SHA>]
