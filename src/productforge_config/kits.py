@@ -58,9 +58,12 @@ KIT_HOOKS: dict[str, tuple[tuple[str, dict[str, str]], ...]] = {
     ),
     "python": (("pyupgrade", {}), ("isort", {}), ("black", {}), ("flake8", {})),
     "shell": (("shellcheck", {}),),
-    "django-api": (("django-mypy", {"exclude": r"'(^|/)migrations/'"}),),
+    "django-api": (("django-mypy", {}),),
     "flutter-web": (("dart-format", {}), ("flutter-analyze", {})),
 }
+
+# A Django app's migrations, which the hooks of a django-api repository skip.
+MIGRATIONS_EXCLUDE = r"(^|/)migrations/"
 
 # A name lower-case, starting with a letter: one that is a valid Compose project name, image
 # prefix, database name, Python package and Dart package all at once.
@@ -294,7 +297,12 @@ def _quoted(value: str) -> str:
 
 def pre_commit_text(decl: Declaration, version: str) -> str:
     """The generated lint configuration: exactly the hooks of the kits taken, at the release."""
-    exclude = r"^\.productforge/" + (f"|{decl.lint_exclude}" if decl.lint_exclude else "")
+    excluded = [r"^\.productforge/"]
+    if "django-api" in decl.kits:
+        excluded.append(MIGRATIONS_EXCLUDE)  # generated code, which no hook holds to a style
+    if decl.lint_exclude:
+        excluded.append(decl.lint_exclude)
+    exclude = "|".join(excluded)
     lines = [
         f"minimum_pre_commit_version: {_quoted(minimum_pre_commit_version())}",
         f"exclude: {_quoted(exclude)}",

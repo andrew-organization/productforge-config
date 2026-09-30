@@ -41,6 +41,14 @@ packages = ["src/productforge_config"]
 
 [tool.uv]
 package = true
+# The package bundles settings/ and kits/, so a change to them, or to the source, rebuilds the
+# non-editable install `make test` runs against (uv's default watches pyproject.toml alone).
+cache-keys = [
+  { file = "pyproject.toml" },
+  { dir = "src" },
+  { dir = "kits" },
+  { dir = "settings" },
+]
 
 # Settings for this repository's own Python (src/, tests/), matching what
 # it publishes in settings/python.toml, on the same Python 3.14.

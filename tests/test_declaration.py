@@ -61,7 +61,8 @@ def test_a_web_app_takes_none_of_the_python_hooks_and_an_api_no_shellcheck(api_r
     assert "shellcheck" not in _hooks(api_repo)
     assert "django-mypy" in _hooks(api_repo)
     text = (api_repo / ".productforge" / "pre-commit.yaml").read_text()
-    assert "exclude: '(^|/)migrations/'" in text  # on django-mypy alone
+    assert "exclude: '^\\.productforge/|(^|/)migrations/'" in text  # generated code, for every hook
+    assert "migrations" not in (web_repo / ".productforge" / "pre-commit.yaml").read_text()
 
 
 def test_the_generated_config_states_the_floor_and_the_release(api_repo: Path) -> None:
@@ -69,7 +70,7 @@ def test_the_generated_config_states_the_floor_and_the_release(api_repo: Path) -
     text = (api_repo / ".productforge" / "pre-commit.yaml").read_text()
     assert "minimum_pre_commit_version: '4.6'" in text
     assert f"    rev: {VERSION}\n" in text
-    assert "exclude: '^\\.productforge/'" in text
+    assert "exclude: '^\\.productforge/|(^|/)migrations/'" in text
 
 
 def test_a_declared_lint_exclude_joins_the_kits_own(api_repo: Path) -> None:
