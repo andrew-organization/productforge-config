@@ -10,7 +10,13 @@ productforge-config = "productforge_config.cli:main"
 productforge-final-newline = "productforge_config.final_newline:main"
 
 [dependency-groups]
-dev = ["pre-commit", "pytest>=9.1", "pytest-xdist>=3.8.0", "pyyaml>=6.0"]
+dev = [
+  "pre-commit",
+  "pre-commit-hooks",
+  "pytest>=9.1",
+  "pytest-xdist>=3.8.0",
+  "pyyaml>=6.0",
+]
 
 [build-system]
 requires = ["hatchling", "hatch-vcs"]
