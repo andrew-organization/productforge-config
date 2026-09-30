@@ -38,44 +38,81 @@ def test_is_a_reusable_workflow(kind: str) -> None:
 
 
 @pytest.mark.parametrize("kind", ["api", "web"])
-def test_inlines_its_setup_rather_than_referencing_an_action_of_this_repository(kind: str) -> None:
+def test_calls_the_setup_action_from_config_checked_out_at_its_own_commit(kind: str) -> None:
+    steps = _steps(kind)
+    checkout = next(s for s in steps if s.get("with", {}).get("path") == ".productforge-config")
+    assert checkout["uses"].startswith("actions/checkout@")
+    assert checkout["with"]["repository"] == "${{ job.workflow_repository }}"
+    assert checkout["with"]["ref"] == "${{ job.workflow_sha }}"
+    setup = next(s for s in steps if s.get("uses") == "./.productforge-config/actions/setup")
+    assert steps.index(checkout) < steps.index(setup)
     text = (WORKFLOWS / f"ci-{kind}.yml").read_text()
-    assert "productforge-config/actions/setup" not in text
-    assert "uses: ./" not in text
+    assert "productforge-config/actions/setup" not in text.replace("./.productforge-config/actions/setup", "")
 
 
 @pytest.mark.parametrize("kind", ["api", "web"])
-def test_pins_the_same_actions_as_the_setup_action(kind: str) -> None:
+def test_restates_none_of_the_setup(kind: str) -> None:
+    text = (WORKFLOWS / f"ci-{kind}.yml").read_text()
+    for step in ("astral-sh/setup-uv", "actions/cache", "subosito/flutter-action", "make install"):
+        assert step not in text
+
+
+def test_the_setup_steps_are_written_in_the_setup_action_only() -> None:
+    pattern = re.compile(r"astral-sh/setup-uv|subosito/flutter-action|actions/cache@|make install")
+    holders = {
+        str(path.relative_to(REPO_ROOT))
+        for path in [*REPO_ROOT.glob(".github/workflows/*.yml"), *REPO_ROOT.glob("actions/*/action.yml")]
+        if pattern.search(path.read_text())
+    }
+    assert holders == {"actions/setup/action.yml"}
+
+
+@pytest.mark.parametrize("kind", ["api", "web"])
+def test_pins_only_actions_the_setup_action_or_checkout_pins(kind: str) -> None:
     pinned = set(re.findall(r"uses: (\S+@[0-9a-f]{40})", (WORKFLOWS / f"ci-{kind}.yml").read_text()))
+    assert pinned
     setup = (REPO_ROOT / "actions" / "setup" / "action.yml").read_text()
     for reference in pinned:
-        assert reference in setup or reference.startswith("actions/checkout@"), reference
+        assert reference.startswith("actions/checkout@") or reference in setup, reference
 
 
 def test_the_api_runs_the_checks_the_template_runs_today() -> None:
-    assert _make_targets("api") == [
-        "install",
-        "lint",
-        "check-migrations",
-        "test",
-        "test-integration-ci",
-    ]
+    assert _make_targets("api") == ["lint", "check-migrations", "test", "test-integration-ci", "check-config"]
 
 
 def test_the_web_runs_the_checks_the_template_runs_today() -> None:
-    assert _make_targets("web") == [
-        "install",
-        "check-generated",
-        "check-identity-regeneration",
-        "lint",
-        "test",
-    ]
+    assert _make_targets("web") == ["check-generated", "check-identity-regeneration", "lint", "test", "check-config"]
 
 
-def test_the_web_installs_the_flutter_its_fvmrc_pins() -> None:
-    (flutter,) = (s for s in _steps("web") if s.get("uses", "").startswith("subosito/flutter-action@"))
-    assert flutter["with"]["flutter-version-file"] == ".fvmrc"
-    assert not [s for s in _steps("api") if "flutter" in s.get("uses", "")]
+def test_the_web_asks_the_setup_for_the_flutter_its_fvmrc_pins() -> None:
+    (setup,) = (s for s in _steps("web") if s.get("uses") == "./.productforge-config/actions/setup")
+    assert setup["with"] == {"flutter": "true"}
+    (api_setup,) = (s for s in _steps("api") if s.get("uses") == "./.productforge-config/actions/setup")
+    assert "with" not in api_setup
+    assert "flutter" in (REPO_ROOT / "actions" / "setup" / "action.yml").read_text()
+    assert "flutter-version-file: .fvmrc" in (REPO_ROOT / "actions" / "setup" / "action.yml").read_text()
+
+
+@pytest.mark.parametrize("kind", ["api", "web"])
+def test_checks_the_written_files_are_unchanged_in_parallel_with_the_other_checks(kind: str) -> None:
+    parallel = _load(kind)["jobs"]["ci"]["steps"][-1]["parallel"]
+    assert {"name": "Config unchanged", "run": "make check-config"} == next(
+        s for s in parallel if s["name"] == "Config unchanged"
+    )
+
+
+def test_the_setup_action_takes_no_postgres_input() -> None:
+    action = yaml.safe_load((REPO_ROOT / "actions" / "setup" / "action.yml").read_text())
+    assert list(action["inputs"]) == ["flutter"]
+    assert "postgres" not in (REPO_ROOT / "actions" / "setup" / "action.yml").read_text().lower()
+    assert "with" not in yaml.safe_load((WORKFLOWS / "ci.yml").read_text())["jobs"]["ci"]["steps"][1]
+
+
+def test_the_setup_action_installs_the_python_the_settings_state() -> None:
+    action = (REPO_ROOT / "actions" / "setup" / "action.yml").read_text()
+    assert "python-version: ${{ steps.python.outputs.version }}" in action
+    assert "settings/python.toml" in action
+    assert not re.search(r'python-version:\s*"?3\.', action)
 
 
 def test_the_web_checks_generated_code_before_anything_else_reads_it() -> None:
@@ -105,5 +142,7 @@ def test_needs_no_step_to_read_productforge_env(kind: str) -> None:
 
 
 @pytest.mark.parametrize("kind", ["api", "web"])
-def test_says_its_setup_mirrors_the_setup_action(kind: str) -> None:
-    assert "mirror" in (WORKFLOWS / f"ci-{kind}.yml").read_text().split("on:")[0]
+def test_says_its_setup_is_written_once_in_the_setup_action(kind: str) -> None:
+    assert "written once, in that action" in " ".join(
+        (WORKFLOWS / f"ci-{kind}.yml").read_text().split("on:")[0].split()
+    )

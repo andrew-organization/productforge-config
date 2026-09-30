@@ -1,6 +1,8 @@
-# The workflows here use `parallel:` steps, which the runner accepts and actionlint's
-# schema does not know; every other check still applies.
+# The workflows here use two things actionlint's schema does not know: `parallel:` steps, which the
+# runner accepts, and `job.workflow_repository` and `job.workflow_sha`, which GitHub's job context
+# carries inside a reusable workflow. Every other check still applies.
 paths:
   .github/workflows/*.yml:
     ignore:
       - 'step must run script with "run" section or run action with "uses" section'
+      - 'property "workflow_(repository|sha)" is not defined in object type'

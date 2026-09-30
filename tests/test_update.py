@@ -57,6 +57,7 @@ def test_rewrites_black_and_isort_keeping_repo_own_keys(repo: Path) -> None:
     cli.update(repo, VERSION)
     text = (repo / "pyproject.toml").read_text()
     assert 'target-version = ["py314"]' in text
+    assert 'requires-python = ">=3.14,<4.0"' in text
     assert "line-length = 120" in text
     assert 'profile = "black"' in text
     assert "line_length = 120" in text

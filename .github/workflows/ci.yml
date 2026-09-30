@@ -21,7 +21,7 @@ jobs:
   # the same shape as every repository that takes this one's release. The
   # setup step here is this repository's own action, run against this
   # repository's own checkout: the same dogfooding that proves it works for
-  # everyone else, with postgres:true so that branch runs too.
+  # everyone else.
   ci:
     runs-on: ubuntu-latest
 
@@ -29,9 +29,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: ./actions/setup
-        with:
-          postgres: "true"
-          postgres-db: productforge_config_ci
 
       - parallel:
           - name: Lint

@@ -22,10 +22,10 @@ repository is brought up to a release by one command, run in it.
   `end-of-file-fixer` holds every text file to a single final newline,
   however it got there: inside a commit it stages its own fix and lets the
   commit through; in CI, or run by hand, it fails as any fixer does.
-- `actions/setup/action.yml` — the CI setup every repository repeats: uv
-  with Python 3.14 and its cache, the pre-commit cache keyed on the
-  caller's hook files, and `make install` — with Flutter and Postgres
-  as options (`flutter: true`, `postgres: true`).
+- `actions/setup/action.yml` — the CI setup every repository repeats, written
+  once: uv with the Python `settings/python.toml` states and its cache, the
+  pre-commit cache keyed on the caller's hook files, and `make install` — with
+  Flutter as an option (`flutter: true`).
 - `.github/workflows/ci-api.yml`, `.github/workflows/ci-web.yml` — the
   reusable CI workflows for an API and a web repository (see "Reusable CI
   workflows"), and `.github/workflows/release.yml`, the reusable release.
@@ -34,7 +34,10 @@ repository is brought up to a release by one command, run in it.
   kits) and `kits/init/`, the thin files `init` writes.
 - `settings/markdownlint.jsonc`, `settings/yamllint.yaml`,
   `settings/python.toml`, `settings/common.toml` — the markdownlint and yamllint
-  rules, the black, isort, flake8 and mypy settings, and the `pre-commit` floor.
+  rules, the Python version and the black, isort, flake8 and mypy settings, and
+  the `pre-commit` floor. The Python version is stated once, in
+  `settings/python.toml`: `update` derives black's target, mypy's version and
+  `requires-python` from it, and `actions/setup` installs it.
   `update` writes them into each repository, as a real local copy, so editors
   read the same rules; a change here reaches every repository on its next
   update.
@@ -264,12 +267,16 @@ cancelled run saves no cache.
 
 Each runs the make targets a developer runs: the API's `make lint`, `make
 check-migrations`, `make test` and `make test-integration-ci` (which starts the
-test Postgres from `compose.test.yml`) in parallel after `make install`; the
-web's `make check-generated` and `make check-identity-regeneration`, then `make
-lint` and `make test` in parallel. The setup is written out in each, because a
-reusable workflow can't reference an action of this repository at its own tag;
-`actions/setup` remains for repositories with their own workflow. `parallel:`
-steps run inside a reusable workflow as they do in a caller's own job.
+test Postgres from `compose.test.yml`) in parallel; the web's `make
+check-generated` and `make check-identity-regeneration`, then `make lint` and
+`make test` in parallel; and both a `Config unchanged` step, `make check-config`,
+so a written file changed by hand, or left behind by a release, fails the pull
+request. The setup is not written out in either: a reusable workflow can't
+reference an action of this repository at its own tag with `uses:`, so each checks
+this repository out at the commit it runs from (`job.workflow_repository` at
+`job.workflow_sha`, into an untracked `.productforge-config/`) and calls
+`actions/setup` from there. `parallel:` steps run inside a reusable workflow as
+they do in a caller's own job.
 
 ## A repository's own side
 
@@ -290,8 +297,6 @@ repos:
 - uses: andrew-organization/productforge-config/actions/setup@v1.0.0
   with:
     flutter: "true"        # reads the repository's own .fvmrc
-    postgres: "true"       # starts postgres:18-alpine as a background container
-    postgres-db: "my_app"  # required when postgres is "true" — no shared default
 ```
 
 ```yaml
