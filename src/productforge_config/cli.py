@@ -330,8 +330,18 @@ def update_workflows(root: Path, version: str) -> bool:
         return False
     for path in sorted(workflows_dir.glob("*.yml")):
         text = path.read_text()
-        new_text, count = _ACTION_REF_RE.subn(lambda m: m.group(1) + version, text)
-        if count and _write_if_changed(path, new_text):
+        count = 0
+        lines = []
+        for line in text.splitlines(keepends=True):
+            # A comment showing how to call a workflow keeps its placeholder version.
+            new_line, found = (
+                (line, 0)
+                if line.lstrip().startswith("#")
+                else _ACTION_REF_RE.subn(lambda m: m.group(1) + version, line)
+            )
+            count += found
+            lines.append(new_line)
+        if count and _write_if_changed(path, "".join(lines)):
             changed = True
     return changed
 

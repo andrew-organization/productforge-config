@@ -285,6 +285,21 @@ def test_moves_the_reusable_ci_workflows_ref(api_repo: Path) -> None:
     assert "v0.9.0" not in ci.read_text()
 
 
+def test_leaves_a_ref_shown_in_a_comment_alone(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    (repo / ".github" / "workflows").mkdir(parents=True)
+    (repo / "productforge.env").write_text("PF_KITS=\n")
+    workflow = repo / ".github" / "workflows" / "x.yml"
+    workflow.write_text(
+        "#       uses: andrew-organization/productforge-config/.github/workflows/ci-api.yml@vX.Y.Z\n"
+        "jobs:\n  ci:\n    uses: andrew-organization/productforge-config/.github/workflows/ci-api.yml@v0.1.0\n"
+    )
+    cli.update(repo, VERSION)
+    text = workflow.read_text()
+    assert "ci-api.yml@vX.Y.Z" in text
+    assert f"    uses: andrew-organization/productforge-config/.github/workflows/ci-api.yml@{VERSION}" in text
+
+
 def test_moves_any_action_or_workflow_of_this_repository(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     (repo / ".github" / "workflows").mkdir(parents=True)
