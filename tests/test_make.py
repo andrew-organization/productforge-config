@@ -87,7 +87,7 @@ def test_integration_tests_use_the_slots_test_postgres_and_the_projects_test_dat
 def test_the_ci_integration_target_starts_the_test_database_and_leaves_it(api: Path) -> None:
     out = _make(api, "test-integration-ci")
     assert "up -d --wait --remove-orphans postgres-test" in out
-    assert "pytest api/tests -m django_db -v --create-db" in out
+    assert "pytest -n auto api/tests -m django_db -v --create-db" in out
     assert "down" not in out
 
 

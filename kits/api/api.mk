@@ -49,7 +49,7 @@ test-integration:
 ## Run DB integration tests against the test Postgres, started here and left running for the runner to discard (used in CI).
 test-integration-ci:
 	$(PF_COMPOSE_TEST) up -d --wait --remove-orphans postgres-test
-	$(PF_TEST_DB_ENV) uv run pytest api/tests -m django_db -v --create-db
+	$(PF_TEST_DB_ENV) uv run pytest -n auto api/tests -m django_db -v --create-db
 
 ## Check every model change has its migration. The git hook and CI both run this target.
 check-migrations:
