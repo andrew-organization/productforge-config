@@ -7,7 +7,7 @@ fail_fast: false
 
 repos:
   - repo: https://github.com/andrew-organization/productforge-config
-    rev: 345e06060af062e9ad07aac41416f8a62c6e937a
+    rev: fd90ed35e1808b095d53cf057a886812d8e80ec8
     hooks:
       - id: trailing-whitespace
       - id: end-of-file-fixer

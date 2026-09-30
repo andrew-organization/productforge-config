@@ -5,4 +5,5 @@
 .productforge/pre-commit.yaml
 .productforge/python.mk
 .productforge/release
+.python-version
 .yamllint
