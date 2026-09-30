@@ -1,3 +1,5 @@
+# Installed by productforge-config's `update`. Generated: change it in productforge-config
+# (andrew-organization/productforge-config), not here, or the next update writes it back.
 # The YAML lint settings every ProductForge repository shares. `make
 # update-config` writes this file whole as a repository's own .yamllint,
 # wherever the repository takes the yamllint hook, so yamllint and editors

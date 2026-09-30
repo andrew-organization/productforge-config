@@ -1,0 +1,25 @@
+# Installed by productforge-config's `update`. Generated: change it in productforge-config
+# (andrew-organization/productforge-config), not here, or the next update writes it back.
+minimum_pre_commit_version: '4.6'
+exclude: '^\.productforge/|^tests/fixture_(repo|api|web)/|^kits/.*\.mk$'
+default_stages: [pre-commit]
+fail_fast: false
+
+repos:
+  - repo: https://github.com/andrew-organization/productforge-config
+    rev: 345e06060af062e9ad07aac41416f8a62c6e937a
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: markdownlint
+        args: [--fix]
+      - id: check-json
+      - id: yamllint
+      - id: taplo-format
+      - id: taplo-lint
+      - id: checkmake
+      - id: pyupgrade
+      - id: isort
+      - id: black
+      - id: flake8
+      - id: shellcheck

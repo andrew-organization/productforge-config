@@ -222,3 +222,36 @@ def test_check_config_runs_the_check_at_the_recorded_release(api_repo: Path) -> 
     out = run_make(api_repo, "-n", "check-config").stdout
     assert "update --check --version $release" in out
     assert "sed -n '1p' .productforge/release" in out
+
+
+# ─── The tool versions ────────────────────────────────────────────────────
+
+
+def test_the_tool_versions_are_stated_in_the_hooks_file_only() -> None:
+    """Each tool a hook installs is pinned once, in .pre-commit-hooks.yaml; nothing else restates the pin."""
+    import subprocess
+
+    hooks = yaml.safe_load((REPO_ROOT / ".pre-commit-hooks.yaml").read_text())
+    pins = {
+        dependency
+        for hook in hooks
+        for dependency in hook.get("additional_dependencies", [])
+        if re.search(r"==|@", dependency)
+    }
+    assert {"black", "yamllint", "flake8"} <= {re.split(r"==|@", pin)[0] for pin in pins}
+    tracked = subprocess.run(
+        ["git", "ls-files"], cwd=REPO_ROOT, capture_output=True, text=True, check=True
+    ).stdout.splitlines()
+    for name in tracked:
+        if (
+            name in {".pre-commit-hooks.yaml", "uv.lock"}
+            or name.startswith("tests/fixture")
+            or not (REPO_ROOT / name).is_file()
+        ):
+            continue
+        try:
+            text = (REPO_ROOT / name).read_text()
+        except UnicodeDecodeError:
+            continue
+        for pin in pins:
+            assert pin not in text, f"{name} restates {pin}"

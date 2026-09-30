@@ -36,3 +36,7 @@ jobs:
 
           - name: Test
             run: make test
+
+          # The files this repository's own update writes, unchanged since the release in .productforge/release.
+          - name: Config unchanged
+            run: make check-config

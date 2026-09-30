@@ -1,0 +1,8 @@
+# The files productforge-config's `update` wrote, so that a later declaration can
+# remove the ones its kits do not carry. Generated: do not edit.
+.editorconfig
+.productforge/common.mk
+.productforge/pre-commit.yaml
+.productforge/python.mk
+.productforge/release
+.yamllint
