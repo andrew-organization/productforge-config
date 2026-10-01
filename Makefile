@@ -29,7 +29,7 @@ lint:
 ## tests/fixture_repo, and the published hooks against fixture files, entirely
 ## against throwaway copies. CI runs this target.
 test:
-	PYTHONDONTWRITEBYTECODE=1 uv run pytest
+	PYTHONDONTWRITEBYTECODE=1 uv run pytest -n auto
 
 # ─── Housekeeping ───────────────────────────────────────────────────────────
 

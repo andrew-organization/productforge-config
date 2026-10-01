@@ -69,14 +69,17 @@ def test_make_targets_the_api_kit_names_all_run(api: Path) -> None:
 
 
 def test_test_runs_the_unit_tests_and_takes_a_path_and_a_keyword(api: Path) -> None:
-    assert 'uv run pytest api/tests -v -m "not django_db"' in _make(api, "test")
-    assert 'uv run pytest api/x.py -v -m "not django_db" -k "y"' in _make(api, "test", "path=api/x.py", "k=y")
+    assert 'uv run pytest -n auto api/tests -v -m "not django_db"' in _make(api, "test")
+    assert 'uv run pytest -n auto api/x.py -v -m "not django_db" -k "y"' in _make(api, "test", "path=api/x.py", "k=y")
 
 
 def test_integration_tests_use_the_slots_test_postgres_and_the_projects_test_database(api: Path) -> None:
     out = _make(api, "test-integration")
     assert "-f .productforge/compose.test.yml --project-directory . up -d --wait --remove-orphans postgres-test" in out
-    assert f"POSTGRES_HOST=localhost POSTGRES_PORT={TEST_POSTGRES} POSTGRES_DB=fixture_api_test uv run pytest" in out
+    assert (
+        f"POSTGRES_HOST=localhost POSTGRES_PORT={TEST_POSTGRES} POSTGRES_DB=fixture_api_test uv run pytest -n auto"
+        in out
+    )
     assert "down --remove-orphans" in out  # and it removes the database after, whatever the tests did
     assert "exit $status" in out
 
@@ -84,7 +87,7 @@ def test_integration_tests_use_the_slots_test_postgres_and_the_projects_test_dat
 def test_the_ci_integration_target_starts_the_test_database_and_leaves_it(api: Path) -> None:
     out = _make(api, "test-integration-ci")
     assert "up -d --wait --remove-orphans postgres-test" in out
-    assert "pytest api/tests -m django_db -v --create-db" in out
+    assert "pytest -n auto api/tests -m django_db -v --create-db" in out
     assert "down" not in out
 
 

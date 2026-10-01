@@ -1,0 +1,6 @@
+# The workflows here use `parallel:` steps, which the runner accepts and actionlint's
+# schema does not know; every other check still applies.
+paths:
+  .github/workflows/*.yml:
+    ignore:
+      - 'step must run script with "run" section or run action with "uses" section'
