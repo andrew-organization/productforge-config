@@ -1,9 +1,9 @@
 name: Set up
 description: >-
-  The CI setup every ProductForge repository repeats: uv with Python 3.14
-  and its cache, the pre-commit cache keyed on the caller's own hook files,
-  and make install — with Flutter and Postgres as options. Run this after
-  actions/checkout; a repository's own parallel checks follow it.
+  The CI setup every ProductForge repository repeats, written once: uv with the
+  Python this release states and its cache, the pre-commit cache keyed on the
+  caller's hook files, and make install, with Flutter as an option. Run this
+  after actions/checkout; a repository's own parallel checks follow it.
 
 inputs:
   flutter:
@@ -11,61 +11,20 @@ inputs:
       Set up Flutter from the caller's own .fvmrc before installing.
     required: false
     default: "false"
-  postgres:
-    description: >-
-      Start postgres:18-alpine as a background container before installing,
-      for a repository whose own checks wait on it.
-    required: false
-    default: "false"
-  postgres-db:
-    description: >-
-      The database postgres:18-alpine creates. Required when postgres is
-      "true" — there's no shared default, since every repository names its
-      own database differently.
-    required: false
-    default: ""
-  postgres-user:
-    description: >-
-      The role postgres:18-alpine creates, when postgres is "true".
-    required: false
-    default: "dev"
-  postgres-password:
-    description: >-
-      The password for postgres-user, when postgres is "true".
-    required: false
-    default: "dev"
 
 runs:
   using: composite
   steps:
-    - name: Validate postgres-db
-      if: inputs.postgres == 'true'
+    # The Python this release of productforge-config states in settings/python.toml, read from the
+    # action's own checkout, so a release moves every repository's Python by moving one value.
+    - name: Read the Python version
+      id: python
       shell: bash
       run: |
-        if [ -z "${{ inputs.postgres-db }}" ]; then
-          echo "::error::postgres: \"true\" requires postgres-db (the database postgres:18-alpine creates)" \
-            "— pass it explicitly, e.g. postgres-db: my_app_db" >&2
-          exit 1
-        fi
-
-    # `docker run -d` itself detaches, so this step returns immediately and
-    # the database boots while everything else installs; only a
-    # repository's own integration tests wait for it. A composite action's
-    # own steps don't support the job-level `background:` key the four
-    # repositories' ci.yml files use for this same command — `-d` already
-    # gives the same effect. postgres-user/postgres-password default to
-    # today's values, shared across every repository; postgres-db has no
-    # shared default and is validated above, since a repository's database
-    # name is its own to choose.
-    - name: Start Postgres
-      if: inputs.postgres == 'true'
-      shell: bash
-      run: >-
-        docker run -d --name postgres -p 5432:5432
-        -e POSTGRES_DB=${{ inputs.postgres-db }}
-        -e POSTGRES_USER=${{ inputs.postgres-user }}
-        -e POSTGRES_PASSWORD=${{ inputs.postgres-password }}
-        postgres:18-alpine
+        python3 - "$GITHUB_ACTION_PATH/../../settings/python.toml" >> "$GITHUB_OUTPUT" <<'PY'
+        import sys, tomllib
+        print("version=" + tomllib.load(open(sys.argv[1], "rb"))["python"]["version"])
+        PY
 
     - name: Set up Flutter
       if: inputs.flutter == 'true'
@@ -77,7 +36,7 @@ runs:
     - name: Set up uv
       uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
       with:
-        python-version: "3.14"
+        python-version: ${{ steps.python.outputs.version }}
         enable-cache: true
         prune-cache: true
 

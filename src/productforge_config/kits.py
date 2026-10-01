@@ -23,6 +23,9 @@ KIT_DIR = ".productforge"
 MANIFEST = f"{KIT_DIR}/manifest"
 RELEASE = f"{KIT_DIR}/release"
 PRE_COMMIT = f"{KIT_DIR}/pre-commit.yaml"
+# What uv reads to pick its Python, so a repository that states no `requires-python` still gets the
+# Python this release states.
+PYTHON_VERSION_FILE = ".python-version"
 HOOK_SOURCE = "https://github.com/andrew-organization/productforge-config"
 
 COMMON = "common"
@@ -292,6 +295,12 @@ def minimum_pre_commit_version() -> str:
     return str(tomllib.loads(text)["pre-commit"]["minimum_version"])
 
 
+def python_version() -> str:
+    """The one statement of the Python version, from settings/python.toml."""
+    text = (bundled_settings_dir() / "python.toml").read_text()
+    return str(tomllib.loads(text)["python"]["version"])
+
+
 def _quoted(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
@@ -350,8 +359,13 @@ def kit_files(decl: Declaration, version: str) -> dict[str, str]:
         files[".pre-commit-config.yaml"] = (settings / f"pre-commit-config-{decl.product_kit}.yaml").read_text()
     files[".editorconfig"] = (settings / "editorconfig").read_text()
     files[".yamllint"] = (settings / "yamllint.yaml").read_text()
+    dockerfile = f"{KIT_DIR}/Dockerfile"
+    if dockerfile in files:  # the image's Python is the stated one
+        files[dockerfile] = files[dockerfile].replace("@PYTHON_VERSION@", python_version())
+    files[PYTHON_VERSION_FILE] = f"{python_version()}\n"
     files[PRE_COMMIT] = pre_commit_text(decl, version)
-    written = {rel: (text if rel == PRE_COMMIT else _with_header(rel, text)) for rel, text in files.items()}
+    bare = {PRE_COMMIT, PYTHON_VERSION_FILE}  # one bare line, or a file a tool reads without comments
+    written = {rel: (text if rel in bare else _with_header(rel, text)) for rel, text in files.items()}
     if decl.product_kit == "flutter-web":
         written[".fvmrc"] = (settings / "fvmrc").read_text()
     written[RELEASE] = f"{version}\n"

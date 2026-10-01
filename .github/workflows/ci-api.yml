@@ -12,8 +12,9 @@ name: CI (API)
 # It runs the make targets a developer runs (make and Docker Compose read the
 # repository's own productforge.env), so a failure here reproduces locally with
 # the same command. A reusable workflow can't reference an action of this
-# repository at its own tag, so its setup steps are written out here and mirror
-# actions/setup/action.yml: a change to either goes in both.
+# repository at its own tag with `uses:`, so it checks this repository out at the
+# commit it runs from (`job.workflow_sha`) and calls actions/setup from there: the
+# setup is written once, in that action.
 on:
   workflow_call:
 
@@ -24,23 +25,16 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Set up uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      # This repository at the commit this workflow runs from, untracked in the caller's checkout so
+      # pre-commit never lints it.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          python-version: "3.14"
-          enable-cache: true
-          prune-cache: true
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .productforge-config
+          persist-credentials: false
 
-      - name: Cache pre-commit environments
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.cache/pre-commit
-          key: >-
-            pre-commit-${{ hashFiles('.productforge/pre-commit.yaml',
-            '.pre-commit-config.yaml', '.pre-commit-lint.yaml') }}
-
-      - name: Install dependencies
-        run: make install
+      - uses: ./.productforge-config/actions/setup
 
       # Parallel steps run inside a reusable workflow just as in a caller's own job.
       - parallel:
@@ -56,3 +50,7 @@ jobs:
           # Starts its own Postgres from the kit's compose.test.yml, on this slot's test port.
           - name: Integration tests
             run: make test-integration-ci
+
+          # The files productforge-config writes, unchanged since the release recorded in .productforge/release.
+          - name: Config unchanged
+            run: make check-config

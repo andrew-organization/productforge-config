@@ -12,8 +12,9 @@ name: CI (web)
 # It runs the make targets a developer runs (make and Docker Compose read the
 # repository's own productforge.env), so a failure here reproduces locally with
 # the same command. A reusable workflow can't reference an action of this
-# repository at its own tag, so its setup steps are written out here and mirror
-# actions/setup/action.yml: a change to either goes in both.
+# repository at its own tag with `uses:`, so it checks this repository out at the
+# commit it runs from (`job.workflow_sha`) and calls actions/setup from there: the
+# setup is written once, in that action.
 on:
   workflow_call:
 
@@ -24,30 +25,19 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # This repository at the commit this workflow runs from, untracked in the caller's checkout so
+      # pre-commit never lints it.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .productforge-config
+          persist-credentials: false
+
       # The Flutter version the repository's own .fvmrc pins.
-      - name: Set up Flutter
-        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+      - uses: ./.productforge-config/actions/setup
         with:
-          flutter-version-file: .fvmrc
-          cache: true
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
-        with:
-          python-version: "3.14"
-          enable-cache: true
-          prune-cache: true
-
-      - name: Cache pre-commit environments
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.cache/pre-commit
-          key: >-
-            pre-commit-${{ hashFiles('.productforge/pre-commit.yaml',
-            '.pre-commit-config.yaml', '.pre-commit-lint.yaml') }}
-
-      - name: Install dependencies
-        run: make install
+          flutter: "true"
 
       # Regenerates code and compares it, so it runs before anything that
       # reads the generated files.
@@ -66,3 +56,7 @@ jobs:
 
           - name: Unit tests
             run: make test
+
+          # The files productforge-config writes, unchanged since the release recorded in .productforge/release.
+          - name: Config unchanged
+            run: make check-config

@@ -4,16 +4,20 @@
 # where it takes django-mypy) and setup.cfg ([flake8]), leaving every other key
 # there — a repository's own excluded paths among them — untouched.
 
-[tool.black]
-target-version = ["py314"]
+[python]
+# The Python every ProductForge repository runs, stated here once. `update` derives black's
+# `target-version` (py314), mypy's `python_version` (3.14) and `requires-python`
+# (>=3.14,<4.0) from it, and actions/setup installs it. The `pyupgrade` hook's `--py314-plus`
+# in .pre-commit-hooks.yaml follows it: a test fails until that argument does.
+version = "3.14"
+# The longest line black and isort format to and flake8 accepts: `update` writes it as black's
+# `line-length`, isort's `line_length` and flake8's `max-line-length`.
 line-length = 120
 
 [tool.isort]
 profile = "black"
-line_length = 120
 
 [tool.flake8]
-max-line-length = 120
 docstring-convention = "google"
 extend-ignore = "D100,D101,D102,D103,D104,D105,D106,D107,D200,D202,D205,D212,D415,E203,W503"
 
@@ -21,7 +25,6 @@ extend-ignore = "D100,D101,D102,D103,D104,D105,D106,D107,D200,D202,D205,D212,D41
 # [tool.mypy] wherever the repository takes the django-mypy hook. What is the
 # project's own — mypy_path, plugins, overrides — stays in its pyproject.toml.
 [tool.mypy]
-python_version = "3.14"
 check_untyped_defs = true
 disallow_untyped_defs = true
 disallow_incomplete_defs = false

@@ -176,9 +176,30 @@ def _latest_release_tag() -> str:
     raise InvalidVersion(f"no release tags found at {HOOK_SOURCE}")
 
 
+def derive_python(version: str) -> dict[str, str]:
+    """What the Python version `major.minor` says to each tool: black's target (`py314`), mypy's and
+    the setup action's version (`3.14`), and the `requires-python` range (`>=3.14,<4.0`).
+    """
+    match = re.fullmatch(r"(\d+)\.(\d+)", version)
+    if match is None:
+        raise UpdateError(f"settings/python.toml's [python] version must be major.minor, like 3.14, not {version!r}")
+    major, minor = int(match.group(1)), int(match.group(2))
+    return {"black": f"py{major}{minor}", "mypy": version, "requires-python": f">={version},<{major + 1}.0"}
+
+
 def _load_python_toml() -> dict[str, Any]:
-    path = _bundled_settings_dir() / "python.toml"
-    return tomllib.loads(path.read_text())
+    """settings/python.toml with the settings derived from its Python version filled in."""
+    settings = tomllib.loads((_bundled_settings_dir() / "python.toml").read_text())
+    derived = derive_python(settings["python"]["version"])
+    tool = settings.setdefault("tool", {})
+    tool.setdefault("black", {})["target-version"] = [derived["black"]]
+    tool.setdefault("mypy", {})["python_version"] = derived["mypy"]
+    line_length = settings["python"]["line-length"]
+    tool.setdefault("black", {})["line-length"] = line_length
+    tool.setdefault("isort", {})["line_length"] = line_length
+    tool.setdefault("flake8", {})["max-line-length"] = line_length
+    settings["python"]["requires-python"] = derived["requires-python"]
+    return settings
 
 
 def _markdownlint_config_text() -> str:
@@ -365,8 +386,8 @@ def update_markdownlint(root: Path) -> bool:
 
 
 def update_pyproject(root: Path, python_toml: dict[str, Any], decl: kits.Declaration) -> bool:
-    """Merges the Python kit's black and isort settings, and the django-api kit's mypy strictness,
-    into pyproject.toml, every other key staying as it is.
+    """Merges the Python kit's `requires-python`, black and isort settings, and the django-api kit's mypy
+    strictness, into pyproject.toml, every other key staying as it is.
     """
     path = root / "pyproject.toml"
     if not path.exists():
@@ -374,6 +395,8 @@ def update_pyproject(root: Path, python_toml: dict[str, Any], decl: kits.Declara
     tool = python_toml.get("tool", {})
     text = path.read_text()
     if "python" in decl.kits:
+        if _section_bounds(text.splitlines(keepends=True), "project") is not None:
+            text = _set_toml_keys(text, "project", {"requires-python": python_toml["python"]["requires-python"]})
         text = _set_toml_keys(
             text, "tool.black", {k: tool["black"][k] for k in BLACK_KEYS if k in tool.get("black", {})}
         )
