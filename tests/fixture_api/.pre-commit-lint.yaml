@@ -3,19 +3,11 @@ default_stages: [pre-commit]
 fail_fast: true
 
 repos:
-  - repo: https://github.com/andrew-organization/productforge-config
-    rev: v0.9.0
+  - repo: local
     hooks:
-      - id: pyupgrade
-      - id: isort
-      - id: black
-      - id: flake8
-      - id: django-mypy
-      - id: trailing-whitespace
-        types: [text]
-      - id: end-of-file-fixer
-        types: [text]
-      - id: markdownlint
-        args: [--fix]
-      - id: yamllint
-      - id: checkmake
+      - id: fixture-own-check
+        name: fixture's own check
+        entry: "true"
+        language: system
+        pass_filenames: false
+        always_run: true

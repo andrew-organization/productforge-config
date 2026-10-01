@@ -1,4 +1,4 @@
-"""Tests of the port arithmetic, in Python (`ports`) and in the kit's make (`common.mk`)."""
+"""Tests of the port arithmetic, in Python (`ports`) and in the kit's make (`product.mk`)."""
 
 import re
 import subprocess
@@ -11,7 +11,7 @@ from productforge_config import cli, ports
 from .conftest import run_make
 
 REPO_ROOT = Path(__file__).parent.parent
-COMMON_MK = REPO_ROOT / "kits" / "common" / "common.mk"
+COMMON_MK = REPO_ROOT / "kits" / "product" / "product.mk"
 
 
 def test_slot_zero_reproduces_the_templates_current_ports() -> None:
@@ -99,15 +99,15 @@ def _mk_value(name: str) -> str:
     return match.group(1).strip()
 
 
-def test_common_mk_holds_the_same_limits_as_the_python() -> None:
+def test_product_mk_holds_the_same_limits_as_the_python() -> None:
     assert {int(p) for p in _mk_value("PF_RESTRICTED_PORTS").split()} == set(ports.CHROMIUM_RESTRICTED_PORTS)
     assert int(_mk_value("PF_LAST_SLOT")) == ports.MAX_SLOT
 
 
 def _make_ports(tmp_path: Path, slot: str) -> subprocess.CompletedProcess[str]:
-    (tmp_path / "productforge.env").write_text(f"PF_KIND=api\nPF_SLOT={slot}\nPF_NAME=demo_app\n")
-    (tmp_path / "Makefile").write_text("include productforge.env\ninclude common.mk\n")
-    (tmp_path / "common.mk").write_text(COMMON_MK.read_text())
+    (tmp_path / "productforge.env").write_text(f"PF_KITS=django-api\nPF_SLOT={slot}\nPF_NAME=demo_app\n")
+    (tmp_path / "Makefile").write_text("include productforge.env\ninclude product.mk\n")
+    (tmp_path / "product.mk").write_text(COMMON_MK.read_text())
     return run_make(tmp_path, "ports")
 
 

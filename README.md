@@ -13,38 +13,39 @@ repository is brought up to a release by one command, run in it.
 - `.pre-commit-hooks.yaml` — the lint hooks every repository shares, each
   pinned to its tool's own version: `trailing-whitespace`,
   `end-of-file-fixer`, `check-json`, `markdownlint`, `yamllint`,
-  `shellcheck`, `taplo-format`, `taplo-lint` and `checkmake` for any
-  repository; `pyupgrade`, `isort`, `black` and `flake8` for Python;
+  `shellcheck`, `taplo-format`, `taplo-lint` and `checkmake`; `pyupgrade`, `isort`, `black` and `flake8` for Python;
   `django-mypy` for a Django API (a system hook, run through the project's
   own uv environment, so mypy's Django plugin can import every runtime
   dependency; it reports without blocking a commit); and
   `dart-format` and `flutter-analyze` for a Flutter app, run through its own
-  Flutter. A repository takes the ones for the files it has.
+  Flutter. A repository takes the ones its kits carry.
   `end-of-file-fixer` holds every text file to a single final newline,
   however it got there: inside a commit it stages its own fix and lets the
   commit through; in CI, or run by hand, it fails as any fixer does.
 - `actions/setup/action.yml` — the CI setup every repository repeats: uv
   with Python 3.14 and its cache, the pre-commit cache keyed on the
-  caller's own hook files, and `make install` — with Flutter and Postgres
+  caller's hook files, and `make install` — with Flutter and Postgres
   as options (`flutter: true`, `postgres: true`).
 - `.github/workflows/ci-api.yml`, `.github/workflows/ci-web.yml` — the
   reusable CI workflows for an API and a web repository (see "Reusable CI
   workflows"), and `.github/workflows/release.yml`, the reusable release.
-- `kits/common/`, `kits/api/`, `kits/web/` — the build, run, test and CI
-  kits (see "Kits"), and `kits/init/`, the two thin files `init` writes.
+- `kits/` — what each kit writes into a repository (see "Kits"): `common`,
+  `python`, `django-api`, `flutter-web`, `product` (shared by the two product
+  kits) and `kits/init/`, the thin files `init` writes.
 - `settings/markdownlint.jsonc`, `settings/yamllint.yaml`,
-  `settings/python.toml` — the markdownlint and yamllint rules and the
-  black, isort, flake8 and mypy settings. `update` writes them into each
-  repository that takes the matching hook, as a real local copy, so editors
+  `settings/python.toml`, `settings/common.toml` — the markdownlint and yamllint
+  rules, the black, isort, flake8 and mypy settings, and the `pre-commit` floor.
+  `update` writes them into each repository, as a real local copy, so editors
   read the same rules; a change here reaches every repository on its next
   update.
-- `settings/editorconfig` — written whole as the `.editorconfig` of each
-  repository that takes `end-of-file-fixer` or `trailing-whitespace`, so
-  editors that read EditorConfig save files the way those hooks leave them.
-- `settings/pre-commit-config-api.yaml`, `settings/pre-commit-config-web.yaml`,
-  `settings/fvmrc` and `settings/dart.toml` — the git-hook config of each
-  kind, and the Flutter version with the Dart SDK constraint that goes with
-  it, written to fixed paths in a repository that takes a kit (see "Kits").
+- `settings/editorconfig` — written whole as every repository's `.editorconfig`,
+  so editors that read EditorConfig save files the way the whitespace hooks
+  leave them.
+- `settings/pre-commit-config-django-api.yaml`,
+  `settings/pre-commit-config-flutter-web.yaml`, `settings/fvmrc` and
+  `settings/dart.toml` — the git-hook config of each product kit, and the
+  Flutter version with the Dart SDK constraint that goes with it, written to
+  fixed paths in a repository that takes the kit (see "Kits").
 - `go.mod` — only so pre-commit can install the golang `checkmake` hook.
 - `settings/github.json` — the GitHub repository settings every
   ProductForge repository shares, checked and applied by
@@ -74,69 +75,94 @@ the workflow `uses:` refs to that commit so a repository can adopt an
 unreleased config, before anything is written, and refused with a clear message
 otherwise.
 
-It moves the productforge-config hook source's `rev` in
-`.pre-commit-lint.yaml`, and every
+It writes the files of every kit the repository's `productforge.env` declares
+(see "Kits"), moves every
 `andrew-organization/productforge-config/actions/...@ref` and
 `andrew-organization/productforge-config/.github/workflows/...@ref` in every
 `.github/workflows/*.yml` file (the setup action, the release workflow, the
-reusable CI workflows), to that version, and rewrites the shared keys this
-release carries into the repository's own local copies
-(`.markdownlint-cli2.jsonc`'s `"config"`; and, only for a hook the
-repository actually takes from this repository's own block in
-`.pre-commit-lint.yaml`, `.yamllint` written whole, `pyproject.toml`'s
-`[tool.black]`/`[tool.isort]`, its `[tool.mypy]` strictness for
-`django-mypy`, and `setup.cfg`'s `[flake8]`) — leaving a repository's own
-hooks, ignored paths and excluded paths exactly as they were. A repository
-with a `productforge.env` also takes its kit (see "Kits"); one without takes
-nothing kit-related. Commit the result and raise it as an ordinary pull
-request; nothing here opens that pull request for you.
+reusable CI workflows) to that version, and merges the shared keys this release
+carries into the repository's own files: `.markdownlint-cli2.jsonc`'s
+`"config"`, and, for the `python` kit, `pyproject.toml`'s
+`[tool.black]`/`[tool.isort]` and `setup.cfg`'s `[flake8]`, and for `django-api`
+`[tool.mypy]`'s strictness. Everything else in those files stays as it was.
+Commit the result and raise it as an ordinary pull request; nothing here opens
+that pull request for you. A repository with no `productforge.env` is refused.
+
+A repository from before the kits split (declared with `PF_KIND`, its hooks
+listed from this repository in `.pre-commit-lint.yaml`, its Makefile including
+`.productforge/common.mk` and `api.mk` or `web.mk`) is moved in the same run:
+`PF_KIND` becomes `PF_KITS`, the block of this repository's hooks is removed from
+`.pre-commit-lint.yaml` (the file is deleted when nothing else is left in it),
+and the Makefile's includes and its own `update-config` recipe give way to
+`.productforge/*.mk`. A `.pre-commit-lint.yaml` that names this repository in
+flow style is refused, since its block cannot be located.
 
 `update --check` changes nothing: it lists what an update would change, and
 exits 1 when there is anything to change, 0 when there is not, and 2 when it
-cannot tell (an invalid version, or a `productforge.env` it can't use). It
-finds a kit file edited by hand, a stale file the update would remove, and a
-workflow ref behind the release.
+cannot tell (an invalid version, a declaration it can't use, or no release
+recorded). Without `--version` it checks at the release recorded in
+`.productforge/release`, so a newer release existing is not drift; `--version
+latest` reports a repository behind the newest release. It finds a written file
+edited by hand, a stale file the update would remove, and a workflow ref behind
+the release. `make check-config` runs it at the recorded release.
 
 ## Kits
 
-A repository takes its build, run, test and CI configuration from this
-repository, and supplies only its own values. It commits a
+A repository says which kits it takes in one line, and everything it shares with
+the others follows from that line and the release it is on. It commits a
 `productforge.env` at its root (dotenv):
 
 ```sh
-PF_KIND=api            # api or web: which kit it takes
-PF_SLOT=0              # its port slot, shared with the other repository of the product
+# Space-separated, any order; `common` is always taken and never named.
+# Kits: python, shell, django-api, flutter-web, release.
+PF_KITS=python django-api
+
+# Required with django-api or flutter-web, refused without one.
+PF_SLOT=0              # the product's port slot, shared by its API and web app
 PF_NAME=acme_api       # the Compose project name, image prefix, database name, and the
                        # Django project package or the Dart package
-# PF_DJANGO_PROJECT=   # optional, defaults to PF_NAME (api)
-# PF_POSTGRES_DB=      # optional, defaults to PF_NAME (api)
+# PF_DJANGO_PROJECT=   # optional, defaults to PF_NAME (django-api)
+# PF_POSTGRES_DB=      # optional, defaults to PF_NAME (django-api)
+# PF_LINT_EXCLUDE=     # optional regular expression of paths the shared hooks skip
 ```
 
 Names are lower-case letters, digits and underscores, starting with a letter.
-`update` installs the kit `PF_KIND` names, written whole into `.productforge/`,
-each file with a header saying it is generated and to change it here:
+`update` refuses, before writing anything, an unknown kit, `common` named, a kit
+named twice, `PF_KIND` with `PF_KITS`, both product kits, a product kit without a
+valid name and slot, and a slot, name or override with no product kit.
+
+`update` writes each kit's files, each with a header saying it is generated
+where its syntax allows one:
 
 | Kit | Files |
 | --- | --- |
-| `common` (both) | `common.mk` (computes and exports `PF_PORT_*` from the slot; `install`, `lint`, `setup-hooks`, `clean`, `ports`), `CLAUDE.md` |
-| `api` | `api.mk` (`test`, `test-integration`, `test-integration-ci`, `check-migrations`, `build`, `up`, `down`, `logs`, `shell`, `lock`, `all`), `Dockerfile`, `entrypoint`, `compose.yml`, `compose.test.yml`, and a root `.dockerignore` |
-| `web` | `web.mk` (`l10n`, `generate`, `identity`, `check-identity-regeneration`, `check-generated`, `test`, `build`, `up`, `debug`, `down`, `serve-build`, `all`), `generate_identity.py`, `check_identity_regeneration.py`, `serve_web_build.py`, `analysis_options.yaml` |
+| `common` (always) | `common.mk` (`install`, `lint`, `setup-hooks`, `clean`, `update-config`, `check-config`), `pre-commit.yaml` (the hooks of the kits taken, at the release), `release` (the release record), and at the root `.editorconfig`, `.yamllint`; the `"config"` of `.markdownlint-cli2.jsonc` |
+| `python` | `python.mk` (`PYTEST`, parallel by default, `test` where `django-api` is not taken, `PYTHONDONTWRITEBYTECODE`, and `clean` of `.venv` and every `__pycache__`); the black and isort keys of `pyproject.toml` and the flake8 keys of `setup.cfg` |
+| `shell` | the `shellcheck` hook |
+| `django-api` | `django-api.mk` (`test`, `test-integration`, `test-integration-ci`, `check-migrations`, `build`, `up`, `down`, `logs`, `shell`, `lock`, `all`), `Dockerfile`, `entrypoint`, `compose.yml`, `compose.test.yml`, a root `.dockerignore` and `.pre-commit-config.yaml`; the `django-mypy` hook and `[tool.mypy]` |
+| `flutter-web` | `flutter-web.mk` (`l10n`, `generate`, `identity`, `check-identity-regeneration`, `check-generated`, `test`, `build`, `up`, `debug`, `down`, `serve-build`, `all`), `generate_identity.py`, `check_identity_regeneration.py`, `serve_web_build.py`, `analysis_options.yaml`, and at the root `.pre-commit-config.yaml` and `.fvmrc`; the pubspec's `environment.sdk` |
+| product kits | `product.mk` (the `PF_` validation, the slot's ports, `ports`) and `CLAUDE.md` |
+| `release` | nothing written yet; the repository calls the shared release workflow |
 
-Every file the kit wrote is listed in `.productforge/manifest`, so an update
-removes a file an earlier kit installed that this kit does not carry, and
-leaves any other file alone. Beside the kit, `update` writes the settings that
-go at fixed paths: `.pre-commit-config.yaml` for the kind, and for a web app
-`.fvmrc` and the pubspec's `environment.sdk`; and it keeps
-`.pre-commit-lint.yaml`'s top-level `exclude` covering `^\.productforge/`,
-adding it or widening the pattern already there, because generated files are
-linted where they are written.
+A repository declares `pre-commit` as a plain dev dependency: `update` (and so
+`update --check`) fails on a `pyproject.toml` that gives it a version, because the floor is
+stated once, in `settings/common.toml`.
 
-The repository's own `Makefile` is thin: it includes `productforge.env`,
-`.productforge/common.mk` and the kit's own `.mk`, and keeps its
-`update-config` target. Its `CLAUDE.md` imports the fragment describing how to
-run, ports and CI with `@.productforge/CLAUDE.md`, and a web app's own
-`analysis_options.yaml` is `include: .productforge/analysis_options.yaml` plus
-what is its own.
+`make lint` runs `.productforge/pre-commit.yaml` and then the repository's own
+`.pre-commit-lint.yaml` when it has one, both always, failing when either does;
+a repository lists only the hooks its kits carry, so it never builds the
+environment of a tool it has no files for. `.pre-commit-lint.yaml` is the
+repository's own hooks only.
+
+Every whole file `update` wrote is listed in `.productforge/manifest`, so a
+declaration that drops a kit has that kit's files removed, and any other file
+is left alone.
+
+The repository's own `Makefile` is thin: it includes `productforge.env` and
+`$(sort $(wildcard .productforge/*.mk))`, and keeps its own targets. A product
+repository's `CLAUDE.md` imports the fragment describing how to run, ports and CI
+with `@.productforge/CLAUDE.md`, and a web app's own `analysis_options.yaml` is
+`include: .productforge/analysis_options.yaml` plus what is its own.
 
 ### Docker Compose
 
@@ -248,14 +274,15 @@ steps run inside a reusable workflow as they do in a caller's own job.
 ## A repository's own side
 
 ```yaml
-# .pre-commit-lint.yaml
+# .pre-commit-lint.yaml: optional, and only the repository's own hooks; the hooks of
+# the kits taken are in .productforge/pre-commit.yaml, which `update` writes.
 repos:
-  - repo: https://github.com/andrew-organization/productforge-config
-    rev: v1.0.0
-    hooks: [{id: trailing-whitespace}, {id: end-of-file-fixer}, {id: markdownlint},
-            {id: yamllint}, {id: checkmake},
-            {id: pyupgrade}, {id: isort}, {id: black}, {id: flake8}]   # the hooks it needs
-  # then the repository's own hooks, unchanged
+  - repo: local
+    hooks:
+      - id: vault
+        name: vault properties contract
+        entry: python3 scripts/vault.py check
+        language: system
 ```
 
 ```yaml

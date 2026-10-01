@@ -1,9 +1,9 @@
 """`productforge-config init`: give a repository its own values and the thin files that use them.
 
-Writes `productforge.env`, the project `Makefile` (which includes the kit's `.mk` files and
-keeps its own `update-config` target) and `.github/workflows/ci.yml` (which calls the kit's
+Writes `productforge.env` (the declaration), the project `Makefile` (which includes every
+`.productforge/*.mk` the kits write) and `.github/workflows/ci.yml` (which calls the kit's
 reusable workflow), renames the repository from the template's name to its own when asked, and
-then runs `update` so `.productforge/` and the rest of the kit are in place. A product's
+then runs `update` so `.productforge/` and the rest of the kits are in place. A product's
 creation calls this once. The two thin files are kits/init/'s templates.
 """
 
@@ -23,14 +23,15 @@ def _template(name: str) -> str:
     return (bundled_kits_dir() / "init" / name).read_text()
 
 
-def makefile_text(env: kits.ProductEnv) -> str:
-    """The thin project Makefile: the kit's targets, and this repository's own `update-config`."""
-    return _template("Makefile").replace("__KIND__", env.kind)
+def makefile_text(decl: kits.Declaration) -> str:
+    """The thin project Makefile: it includes the kits' makefiles and keeps the repository's own targets."""
+    return _template("Makefile")
 
 
-def ci_text(env: kits.ProductEnv, version: str) -> str:
-    """The thin ci.yml: every pull request runs the kit's reusable workflow for this kind."""
-    return _template("ci.yml").replace("__KIND__", env.kind).replace("__VERSION__", version)
+def ci_text(decl: kits.Declaration, version: str) -> str:
+    """The thin ci.yml: every pull request and every push to main runs the reusable workflow for this kind."""
+    assert decl.kind is not None  # init only ever declares a product kit
+    return _template("ci.yml").replace("__KIND__", decl.kind).replace("__VERSION__", version)
 
 
 def run_uv_lock(root: Path) -> None:
@@ -63,7 +64,7 @@ def format_dart(root: Path) -> str | None:
     return None
 
 
-def init(root: Path, env: kits.ProductEnv, version: str, old_name: str | None = None) -> list[str]:
+def init(root: Path, decl: kits.Declaration, version: str, old_name: str | None = None) -> list[str]:
     """Write the repository's own files, renaming it first when `old_name` is given. Returns what
     it changed, the kit's own files excluded (`update` reports those) and a rename summarised as
     one line, not a line for each file.
@@ -73,20 +74,20 @@ def init(root: Path, env: kits.ProductEnv, version: str, old_name: str | None = 
         if not kits.NAME_RE.match(old_name.replace("-", "_")):
             raise InitError(f"--from must be a name in snake_case or kebab-case, not {old_name!r}")
         try:
-            renamed = rename.rename(root, old_name, env.name)
+            renamed = rename.rename(root, old_name, decl.name)
         except rename.RenameError as exc:
             raise InitError(str(exc)) from exc
         changed.append(f"{len(renamed)} paths renamed from {old_name}")
-        if env.kind == "web":
+        if decl.kind == "web":
             note = format_dart(root)
             changed.append(note or "lib and test formatted")
         if (root / "pyproject.toml").is_file():
             run_uv_lock(root)
             changed.append("uv.lock")
     for relative, text in (
-        (kits.ENV_FILE, kits.env_text(env)),
-        ("Makefile", makefile_text(env)),
-        (".github/workflows/ci.yml", ci_text(env, version)),
+        (kits.ENV_FILE, kits.env_text(decl)),
+        ("Makefile", makefile_text(decl)),
+        (".github/workflows/ci.yml", ci_text(decl, version)),
     ):
         path = root / relative
         path.parent.mkdir(parents=True, exist_ok=True)

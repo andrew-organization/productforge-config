@@ -1,7 +1,7 @@
 # The rest of a web repository's Makefile: localisation, code generation, the
-# product's identity, testing and the local dev server. Included after
-# common.mk, which supplies the ports, names and the targets every repository
-# shares.
+# product's identity, testing and the local dev server. Included with
+# common.mk and product.mk, which supply the ports, names and the targets every
+# repository shares.
 
 # Use fvm's pinned Flutter/Dart SDK when fvm is available (local dev); fall
 # back to a bare `flutter`/`dart` otherwise (CI, where flutter-action already

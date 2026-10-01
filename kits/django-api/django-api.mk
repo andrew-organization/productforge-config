@@ -1,6 +1,6 @@
 # The rest of an API repository's Makefile: testing, migrations and the local
-# Docker Compose project. Included after common.mk, which supplies the ports, names and
-# the targets every repository shares.
+# Docker Compose project. Included with common.mk, product.mk and python.mk, which supply the ports, names, the
+# targets every repository shares and PYTEST.
 
 # Speed up builds.
 export COMPOSE_DOCKER_CLI_BUILD=1
@@ -37,19 +37,19 @@ lock:
 ## path (optional): repo-relative path to a test file or directory.
 ## k (optional): pytest -k expression to match test names or keywords.
 test:
-	uv run pytest -n auto $(if $(path),$(path),api/tests) -v -m "not django_db" $(if $(k),-k "$(k)")
+	$(PYTEST) $(if $(path),$(path),api/tests) -v -m "not django_db" $(if $(k),-k "$(k)")
 
 ## Run DB integration tests against a disposable Postgres, and remove it after. Usage: make test-integration [path=<path>] [k=<keyword>]
 ## Uses its own Postgres container on this slot's test port, so it can run alongside the app.
 test-integration:
 	$(PF_COMPOSE_TEST) up -d --wait --remove-orphans postgres-test
-	$(PF_TEST_DB_ENV) uv run pytest -n auto $(if $(path),$(path),api/tests) -m django_db -v $(if $(k),-k "$(k)"); \
+	$(PF_TEST_DB_ENV) $(PYTEST) $(if $(path),$(path),api/tests) -m django_db -v $(if $(k),-k "$(k)"); \
 		status=$$?; $(PF_COMPOSE_TEST) down --remove-orphans; exit $$status
 
 ## Run DB integration tests against the test Postgres, started here and left running for the runner to discard (used in CI).
 test-integration-ci:
 	$(PF_COMPOSE_TEST) up -d --wait --remove-orphans postgres-test
-	$(PF_TEST_DB_ENV) uv run pytest -n auto api/tests -m django_db -v --create-db
+	$(PF_TEST_DB_ENV) $(PYTEST) api/tests -m django_db -v --create-db
 
 ## Check every model change has its migration. The git hook and CI both run this target.
 check-migrations:

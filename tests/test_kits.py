@@ -3,8 +3,6 @@ what goes with it, and `update --check`. Each test works on a throwaway copy of 
 """
 
 import json
-import re
-import shutil
 from pathlib import Path
 
 import pytest
@@ -13,24 +11,26 @@ from productforge_config import cli, kits
 
 from .conftest import VERSION
 
-API_KIT = {
+COMMON_FILES = {".productforge/common.mk", ".productforge/pre-commit.yaml", ".productforge/release"}
+API_KIT = COMMON_FILES | {
     ".productforge/CLAUDE.md",
     ".productforge/Dockerfile",
-    ".productforge/api.mk",
-    ".productforge/common.mk",
+    ".productforge/django-api.mk",
+    ".productforge/product.mk",
+    ".productforge/python.mk",
     ".productforge/compose.test.yml",
     ".productforge/compose.yml",
     ".productforge/entrypoint",
     ".dockerignore",
 }
-WEB_KIT = {
+WEB_KIT = COMMON_FILES | {
     ".productforge/CLAUDE.md",
     ".productforge/analysis_options.yaml",
     ".productforge/check_identity_regeneration.py",
-    ".productforge/common.mk",
+    ".productforge/product.mk",
     ".productforge/generate_identity.py",
     ".productforge/serve_web_build.py",
-    ".productforge/web.mk",
+    ".productforge/flutter-web.mk",
 }
 
 
@@ -61,17 +61,18 @@ def test_a_kind_installs_nothing_of_the_others(api_repo: Path, web_repo: Path) -
     cli.update(api_repo, VERSION)
     cli.update(web_repo, VERSION)
     assert not (api_repo / ".productforge" / "web.mk").exists()
-    assert not (web_repo / ".productforge" / "api.mk").exists()
+    assert not (web_repo / ".productforge" / "django-api.mk").exists()
     assert not (web_repo / ".productforge" / "compose.yml").exists()
+    assert not (web_repo / ".productforge" / "python.mk").exists()
 
 
 @pytest.mark.parametrize("fixture", ["api_repo", "web_repo"])
 def test_every_installed_file_carries_the_generated_header(fixture: str, request: pytest.FixtureRequest) -> None:
     repo: Path = request.getfixturevalue(fixture)
     cli.update(repo, VERSION)
-    for rel in [*_installed(repo), ".dockerignore"]:
+    for rel in [*_installed(repo), ".dockerignore", ".yamllint", ".editorconfig", ".pre-commit-config.yaml"]:
         path = repo / rel
-        if not path.exists():
+        if not path.exists() or rel == ".productforge/release":  # the release record is one bare line
             continue
         head = "\n".join(path.read_text().splitlines()[:6])
         assert "Generated: change it in productforge-config" in head, rel
@@ -130,9 +131,8 @@ def test_adds_the_mypy_strictness_to_pyproject_where_django_mypy_is_taken(api_re
     assert 'plugins = ["mypy_django_plugin.main"]' in text
 
 
-def test_leaves_mypy_alone_without_the_django_mypy_hook(api_repo: Path) -> None:
-    lint = api_repo / ".pre-commit-lint.yaml"
-    lint.write_text(lint.read_text().replace("      - id: django-mypy\n", ""))
+def test_leaves_mypy_alone_without_the_django_api_kit(api_repo: Path) -> None:
+    (api_repo / "productforge.env").write_text("PF_KITS=python\n")
     cli.update(api_repo, VERSION)
     assert 'python_version = "3.12"' in (api_repo / "pyproject.toml").read_text()
 
@@ -150,20 +150,6 @@ def test_reports_the_kits_files(api_repo: Path) -> None:
     assert API_KIT <= set(changed)
     assert ".productforge/manifest" in changed
     assert ".pre-commit-config.yaml" in changed
-    assert changed.count(".pre-commit-lint.yaml") == 1
-
-
-def test_a_repository_without_productforge_env_takes_no_kit(tmp_path: Path) -> None:
-    fixture = Path(__file__).parent / "fixture_repo"
-    repo = tmp_path / "repo"
-    shutil.copytree(fixture, repo)
-    cli.update(repo, VERSION)
-    assert not (repo / ".productforge").exists()
-    assert not (repo / ".pre-commit-config.yaml").exists()
-    assert not (repo / ".dockerignore").exists()
-    assert "productforge" not in (repo / ".pre-commit-lint.yaml").read_text().replace(
-        "andrew-organization/productforge-config", ""
-    )
 
 
 # ─── Stale files ──────────────────────────────────────────────────────────
@@ -192,10 +178,10 @@ def test_leaves_a_file_no_manifest_lists(api_repo: Path) -> None:
     assert (api_repo / ".productforge" / "mine.txt").exists()
 
 
-def test_switching_kind_removes_the_old_kits_files(api_repo: Path) -> None:
+def test_switching_kits_removes_the_old_kits_files(api_repo: Path) -> None:
     cli.update(api_repo, VERSION)
     env = api_repo / "productforge.env"
-    env.write_text(env.read_text().replace("PF_KIND=api", "PF_KIND=web"))
+    env.write_text(env.read_text().replace("PF_KITS=python django-api", "PF_KITS=flutter-web"))
     cli.update(api_repo, VERSION)
     assert _installed(api_repo) == WEB_KIT
     assert not (api_repo / ".dockerignore").exists()
@@ -232,10 +218,10 @@ def test_check_exits_1_on_drift_and_0_without(api_repo: Path, capsys: pytest.Cap
 
 def test_check_finds_an_installed_file_edited_by_hand(web_repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
     cli.update(web_repo, VERSION)
-    mk = web_repo / ".productforge" / "web.mk"
+    mk = web_repo / ".productforge" / "flutter-web.mk"
     mk.write_text(mk.read_text() + "\nlocal-tweak:\n")
     assert cli.main(["update", "--version", VERSION, "--path", str(web_repo), "--check"]) == 1
-    assert ".productforge/web.mk" in capsys.readouterr().out
+    assert ".productforge/flutter-web.mk" in capsys.readouterr().out
     assert "local-tweak" in mk.read_text()
 
 
@@ -256,118 +242,33 @@ def test_check_finds_a_workflow_ref_behind(api_repo: Path) -> None:
     assert cli.update(api_repo, VERSION, check=True) == [".github/workflows/*.yml"]
 
 
-# ─── The lint config's exclude ────────────────────────────────────────────
-
-
-def _exclude(repo: Path) -> str:
-    match = re.search(r"^exclude:.*$", (repo / ".pre-commit-lint.yaml").read_text(), re.MULTILINE)
-    assert match
-    return match.group(0)
-
-
-def test_widens_a_single_quoted_exclude_keeping_what_it_excluded(api_repo: Path) -> None:
-    cli.update(api_repo, VERSION)
-    assert _exclude(api_repo) == r"exclude: '(^|/)migrations/|^\.git/|^\.productforge/'"
-
-
-def test_widens_a_plain_and_a_double_quoted_exclude(api_repo: Path) -> None:
-    lint = api_repo / ".pre-commit-lint.yaml"
-    text = lint.read_text()
-    lint.write_text(text.replace(r"exclude: '(^|/)migrations/|^\.git/'", r"exclude: ^\.git/  # git's own"))
-    cli.update(api_repo, VERSION)
-    assert _exclude(api_repo) == r"exclude: ^\.git/|^\.productforge/  # git's own"
-
-    lint.write_text(text.replace(r"exclude: '(^|/)migrations/|^\.git/'", r'exclude: "^\\.git/"'))
-    cli.update(api_repo, VERSION)
-    assert _exclude(api_repo) == r'exclude: "^\\.git/|^\\.productforge/"'
-
-
-def test_adds_an_exclude_where_there_is_none(web_repo: Path) -> None:
-    cli.update(web_repo, VERSION)
-    lines = (web_repo / ".pre-commit-lint.yaml").read_text().splitlines()
-    assert lines[0] == r"exclude: '^\.productforge/'"
-    assert lines[1] == "default_stages: [pre-commit]"
-
-
-def test_adds_the_exclude_after_a_leading_comment(web_repo: Path) -> None:
-    lint = web_repo / ".pre-commit-lint.yaml"
-    lint.write_text("# The lint hooks.\n\n" + lint.read_text())
-    cli.update(web_repo, VERSION)
-    lines = lint.read_text().splitlines()
-    assert lines[:3] == ["# The lint hooks.", "", r"exclude: '^\.productforge/'"]
-
-
-def test_leaves_an_exclude_that_already_covers_the_kit(api_repo: Path) -> None:
-    lint = api_repo / ".pre-commit-lint.yaml"
-    lint.write_text(lint.read_text().replace(r"^\.git/'", r"^\.git/|^\.productforge/'"))
-    text = lint.read_text()
-    cli.update(api_repo, VERSION)
-    assert lint.read_text().replace("v0.9.0", VERSION) == text.replace("v0.9.0", VERSION)
-    assert _exclude(api_repo).count("productforge") == 1
-
-
-def test_leaves_an_exclude_of_another_shape_that_already_matches_the_kit(api_repo: Path) -> None:
-    lint = api_repo / ".pre-commit-lint.yaml"
-    lint.write_text(lint.read_text().replace(r"'(^|/)migrations/|^\.git/'", r"'^\.'"))
-    cli.update(api_repo, VERSION)
-    assert _exclude(api_repo) == r"exclude: '^\.'"
-
-
-def test_refuses_a_multi_line_exclude_it_cannot_widen(api_repo: Path) -> None:
-    lint = api_repo / ".pre-commit-lint.yaml"
-    lint.write_text(
-        lint.read_text().replace(r"exclude: '(^|/)migrations/|^\.git/'", "exclude: |\n  (?x)\n  ^\\.git/\n")
-    )
-    with pytest.raises(cli.UpdateError, match="multi-line"):
-        cli.update(api_repo, VERSION)
-
-
 # ─── productforge.env ─────────────────────────────────────────────────────
 
 
 def test_parses_a_dotenv_file() -> None:
     values = kits.parse_dotenv(
-        "# a comment\n\nPF_KIND=api\nexport PF_SLOT = 3 # the slot\nPF_NAME=\"quoted_name\"\nnot a pair\nPF_X='y'\n"
+        "# a comment\n\nPF_KITS=python\nexport PF_SLOT = 3 # the slot\nPF_NAME=\"quoted_name\"\nnot a pair\nPF_X='y'\n"
     )
-    assert values == {"PF_KIND": "api", "PF_SLOT": "3", "PF_NAME": "quoted_name", "PF_X": "y"}
+    assert values == {"PF_KITS": "python", "PF_SLOT": "3", "PF_NAME": "quoted_name", "PF_X": "y"}
 
 
 def test_the_optional_overrides_default_to_the_name(api_repo: Path) -> None:
-    env = kits.read_env(api_repo)
-    assert env is not None
-    assert (env.kind, env.slot, env.name) == ("api", 3, "fixture_api")
-    assert env.django_project == env.postgres_db == "fixture_api"
+    decl = kits.read_env(api_repo)
+    assert decl is not None
+    assert (decl.kits, decl.kind, decl.slot, decl.name) == (("python", "django-api"), "api", 3, "fixture_api")
+    assert decl.django_project == decl.postgres_db == "fixture_api"
     (api_repo / "productforge.env").write_text(
-        "PF_KIND=api\nPF_SLOT=0\nPF_NAME=fixture_api\nPF_DJANGO_PROJECT=core\nPF_POSTGRES_DB=fixture_db\n"
+        "PF_KITS=python django-api\nPF_SLOT=0\nPF_NAME=fixture_api\nPF_DJANGO_PROJECT=core\nPF_POSTGRES_DB=fixture_db\n"
     )
-    env = kits.read_env(api_repo)
-    assert env is not None
-    assert (env.django_project, env.postgres_db) == ("core", "fixture_db")
+    decl = kits.read_env(api_repo)
+    assert decl is not None
+    assert (decl.django_project, decl.postgres_db) == ("core", "fixture_db")
 
 
-@pytest.mark.parametrize(
-    ("text", "message"),
-    [
-        ("PF_SLOT=0\nPF_NAME=demo\n", "PF_KIND"),
-        ("PF_KIND=mobile\nPF_SLOT=0\nPF_NAME=demo\n", "PF_KIND"),
-        ("PF_KIND=api\nPF_NAME=demo\n", "PF_SLOT"),
-        ("PF_KIND=api\nPF_SLOT=08\nPF_NAME=demo\n", "PF_SLOT"),
-        ("PF_KIND=api\nPF_SLOT=28\nPF_NAME=demo\n", "6665"),
-        ("PF_KIND=api\nPF_SLOT=0\n", "PF_NAME"),
-        ("PF_KIND=api\nPF_SLOT=0\nPF_NAME=Not-Snake\n", "PF_NAME"),
-        ("PF_KIND=api\nPF_SLOT=0\nPF_NAME=demo\nPF_DJANGO_PROJECT=9lives\n", "PF_DJANGO_PROJECT"),
-    ],
-)
-def test_refuses_a_productforge_env_it_cannot_use(api_repo: Path, text: str, message: str) -> None:
-    (api_repo / "productforge.env").write_text(text)
-    with pytest.raises(kits.EnvError, match=message):
-        cli.update(api_repo, VERSION)
-
-
-def test_main_reports_a_bad_productforge_env_without_writing(
+def test_the_main_reports_a_bad_productforge_env_without_writing(
     api_repo: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    (api_repo / "productforge.env").write_text("PF_KIND=api\nPF_SLOT=28\nPF_NAME=demo\n")
+    (api_repo / "productforge.env").write_text("PF_KITS=python django-api\nPF_SLOT=28\nPF_NAME=demo\n")
     assert cli.main(["update", "--version", VERSION, "--path", str(api_repo)]) == 1
     assert "6665" in capsys.readouterr().err
     assert not (api_repo / ".productforge").exists()
@@ -384,9 +285,25 @@ def test_moves_the_reusable_ci_workflows_ref(api_repo: Path) -> None:
     assert "v0.9.0" not in ci.read_text()
 
 
+def test_leaves_a_ref_shown_in_a_comment_alone(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    (repo / ".github" / "workflows").mkdir(parents=True)
+    (repo / "productforge.env").write_text("PF_KITS=\n")
+    workflow = repo / ".github" / "workflows" / "x.yml"
+    workflow.write_text(
+        "#       uses: andrew-organization/productforge-config/.github/workflows/ci-api.yml@vX.Y.Z\n"
+        "jobs:\n  ci:\n    uses: andrew-organization/productforge-config/.github/workflows/ci-api.yml@v0.1.0\n"
+    )
+    cli.update(repo, VERSION)
+    text = workflow.read_text()
+    assert "ci-api.yml@vX.Y.Z" in text
+    assert f"    uses: andrew-organization/productforge-config/.github/workflows/ci-api.yml@{VERSION}" in text
+
+
 def test_moves_any_action_or_workflow_of_this_repository(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     (repo / ".github" / "workflows").mkdir(parents=True)
+    (repo / "productforge.env").write_text("PF_KITS=\n")
     (repo / ".github" / "workflows" / "x.yml").write_text(
         "a: {uses: andrew-organization/productforge-config/actions/other@v0.1.0}\n"
         "b: andrew-organization/productforge-config/.github/workflows/ci-web.yml@v0.1.0\n"
@@ -407,7 +324,7 @@ SHA = "0123456789abcdef0123456789abcdef01234567"
 
 def test_pins_hooks_and_workflow_refs_to_a_commit_sha(api_repo: Path) -> None:
     assert cli.main(["update", "--version", SHA, "--path", str(api_repo)]) == 0
-    assert f"rev: {SHA}" in (api_repo / ".pre-commit-lint.yaml").read_text()
+    assert f"rev: {SHA}" in (api_repo / ".productforge" / "pre-commit.yaml").read_text()
     assert f"ci-api.yml@{SHA}" in (api_repo / ".github" / "workflows" / "ci.yml").read_text()
 
 
@@ -429,10 +346,10 @@ def test_the_kits_name_no_product_of_the_pipeline() -> None:
 
 def test_check_exits_2_on_an_error_and_1_on_drift(api_repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert cli.main(["update", "--version", "nope", "--path", str(api_repo), "--check"]) == 2
-    (api_repo / "productforge.env").write_text("PF_KIND=api\nPF_SLOT=28\nPF_NAME=demo\n")
+    (api_repo / "productforge.env").write_text("PF_KITS=python django-api\nPF_SLOT=28\nPF_NAME=demo\n")
     assert cli.main(["update", "--version", VERSION, "--path", str(api_repo), "--check"]) == 2
     assert "6665" in capsys.readouterr().err
-    (api_repo / "productforge.env").write_text("PF_KIND=api\nPF_SLOT=1\nPF_NAME=demo\n")
+    (api_repo / "productforge.env").write_text("PF_KITS=python django-api\nPF_SLOT=1\nPF_NAME=demo\n")
     assert cli.main(["update", "--version", VERSION, "--path", str(api_repo), "--check"]) == 1
 
 
@@ -457,8 +374,8 @@ def test_the_claude_fragments_point_at_make_ports_and_document_the_env_overrides
 
 
 def test_only_an_api_env_file_offers_the_django_and_database_overrides(tmp_path: Path) -> None:
-    assert "PF_DJANGO_PROJECT" in kits.env_text(kits.validate("api", 0, "demo"))
-    assert "PF_DJANGO_PROJECT" not in kits.env_text(kits.validate("web", 0, "demo"))
+    assert "PF_DJANGO_PROJECT" in kits.env_text(kits.for_kind("api", 0, "demo"))
+    assert "PF_DJANGO_PROJECT" not in kits.env_text(kits.for_kind("web", 0, "demo"))
 
 
 @pytest.mark.parametrize("fixture", ["api_repo", "web_repo"])
@@ -466,7 +383,9 @@ def test_no_installed_kit_file_speaks_of_a_template(fixture: str, request: pytes
     """A kit lands in every product, so it says only what holds in any repository."""
     repo: Path = request.getfixturevalue(fixture)
     cli.update(repo, VERSION)
-    files = [repo / rel for rel in kits.kit_files(kits.read_env(repo).kind)]  # type: ignore[union-attr]
+    decl = kits.read_env(repo)
+    assert decl is not None
+    files = [repo / rel for rel in kits.kit_files(decl, VERSION)]
     assert files
     for path in files:
         assert "template" not in path.read_text().lower(), path.relative_to(repo)
