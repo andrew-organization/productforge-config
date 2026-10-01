@@ -1,5 +1,5 @@
-# This repository's own copy of settings/editorconfig, which every other
-# ProductForge repository gets through `productforge-config update`.
+# Installed by productforge-config's `update`. Generated: change it in productforge-config
+# (andrew-organization/productforge-config), not here, or the next update writes it back.
 # Editors that read EditorConfig save every file the way the shared
 # end-of-file-fixer and trailing-whitespace hooks would leave it.
 root = true

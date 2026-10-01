@@ -185,6 +185,13 @@ the API and on the web app) adds this machine's LAN IP to the allowed hosts and
 CORS origins, and points the web app at the API on that IP, so a phone on the
 same network reaches both.
 
+This repository takes its own kits, `python shell release`, through its own
+`update`, at the release it last recorded: its hooks, `.editorconfig`,
+`.yamllint`, `.markdownlint-cli2.jsonc` and `setup.cfg` are what `update` writes,
+and its CI checks them with `make check-config`. Its own lint declares only what
+is its own: `PF_LINT_EXCLUDE` in `productforge.env` skips `tests/fixture_*` and the
+kits' makefile fragments.
+
 ## Ports
 
 A slot owns 20 local ports, from 6100 + 20 x slot. The API and the web app of a

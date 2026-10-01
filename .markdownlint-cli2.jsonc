@@ -1,11 +1,3 @@
-// Markdown lint standards — enforced by pre-commit and CI, matching every
-// other ProductForge repository (this repository is where they come from).
-//
-// - MD001/MD025: consistent heading structure (one H1 per file, no skipped
-//   levels).
-// - MD024 uses siblings_only: repeated subheadings under different parents
-//   are fine; duplicates at the same level within one file are not.
-// - MD060 uses compact table style (`| --- |`, not padded dashes).
 {
   "config": {
     "default": false,

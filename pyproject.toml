@@ -11,8 +11,8 @@ productforge-final-newline = "productforge_config.final_newline:main"
 
 [dependency-groups]
 dev = [
-  "pre-commit>=4.6",
-  "pre-commit-hooks==6.0.0",
+  "pre-commit",
+  "pre-commit-hooks",
   "pytest>=9.1",
   "pytest-xdist>=3.8.0",
   "pyyaml>=6.0",
