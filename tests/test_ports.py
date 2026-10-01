@@ -1,134 +1,100 @@
-"""Tests of the port arithmetic, in Python (`ports`) and in the kit's make (`product.mk`)."""
+"""The port arithmetic, as the command prints it (`productforge-config ports`) and as the kits' make works it out."""
 
 import re
-import subprocess
 from pathlib import Path
 
 import pytest
 
-from productforge_config import cli, ports
-
-from .conftest import run_make
-
-REPO_ROOT = Path(__file__).parent.parent
-COMMON_MK = REPO_ROOT / "kits" / "product" / "product.mk"
+from .conftest import Repo, run_config
 
 
-def test_slot_zero_reproduces_the_templates_current_ports() -> None:
-    assert ports.ports_for(0) == {
-        "API": 6100,
-        "POSTGRES": 6101,
-        "REDIS": 6102,
-        "FLOWER": 6103,
-        "MAILPIT_SMTP": 6104,
-        "MAILPIT_UI": 6105,
-        "WEB": 6106,
-        "TEST_POSTGRES": 6111,
-    }
+@pytest.fixture
+def restricted(shipped: Path) -> set[int]:
+    """The ports the kit's make refuses a slot for: a second statement of the limit, to hold the command to."""
+    return {int(port) for port in mk_value(shipped, "PF_RESTRICTED_PORTS").split()}
 
 
-def test_a_slot_owns_twenty_ports_from_6100_plus_twenty_a_slot() -> None:
-    assert ports.ports_for(3)["API"] == 6160
-    assert ports.ports_for(3)["WEB"] == 6166
-    assert ports.ports_for(3)["TEST_POSTGRES"] == 6171
-    assert list(ports.block(3)) == list(range(6160, 6180))
+@pytest.fixture
+def last_slot(shipped: Path) -> int:
+    return int(mk_value(shipped, "PF_LAST_SLOT"))
 
 
-def test_adjacent_slots_never_share_a_port() -> None:
-    assert not set(ports.block(4)) & set(ports.block(5))
-
-
-@pytest.mark.parametrize(
-    ("slot", "why"),
-    [
-        (23, "6566"),  # offset 6, the web dev server
-        (28, "6665"),  # offsets 5-9
-        (29, "6697"),  # a reserved offset: no later kit may land on it either
-        (199, "10080"),
-    ],
-)
-def test_refuses_a_slot_whose_block_holds_a_chromium_restricted_port(slot: int, why: str) -> None:
-    with pytest.raises(ports.PortError, match=why):
-        ports.block(slot)
-
-
-@pytest.mark.parametrize("slot", [-1, 1333, 10**6])
-def test_refuses_a_slot_out_of_range(slot: int) -> None:
-    with pytest.raises(ports.PortError):
-        ports.block(slot)
-
-
-def test_the_highest_slot_stays_below_the_ephemeral_range() -> None:
-    assert max(ports.block(ports.MAX_SLOT)) < 32768
-
-
-def test_no_usable_slot_holds_a_restricted_port() -> None:
-    usable = []
-    for slot in range(ports.MAX_SLOT + 1):
-        try:
-            ports.block(slot)
-        except ports.PortError:
-            continue
-        usable.append(slot)
-    assert 0 in usable and 1 in usable
-    assert all(not ports.CHROMIUM_RESTRICTED_PORTS & set(ports.block(slot)) for slot in usable)
-
-
-def test_the_ports_command_prints_the_slots_ports(capsys: pytest.CaptureFixture[str]) -> None:
-    assert cli.main(["ports", "--slot", "1"]) == 0
-    out = capsys.readouterr().out
-    assert "6120  the API" in out
-    assert "6126  the web dev server, and a served build" in out
-
-
-def test_the_ports_command_prints_env_lines(capsys: pytest.CaptureFixture[str]) -> None:
-    assert cli.main(["ports", "--slot", "1", "--env"]) == 0
-    lines = capsys.readouterr().out.splitlines()
-    assert lines[0] == "PF_PORT_API=6120"
-    assert "PF_PORT_TEST_POSTGRES=6131" in lines
-
-
-def test_the_ports_command_refuses_a_restricted_slot(capsys: pytest.CaptureFixture[str]) -> None:
-    assert cli.main(["ports", "--slot", "28"]) == 1
-    assert "6665" in capsys.readouterr().err
-
-
-def _mk_value(name: str) -> str:
-    match = re.search(rf"^{name} := (.+)$", COMMON_MK.read_text(), re.MULTILINE)
+def mk_value(shipped: Path, name: str) -> str:
+    match = re.search(rf"^{name} := (.+)$", (shipped / "kits" / "product" / "product.mk").read_text(), re.MULTILINE)
     assert match, name
     return match.group(1).strip()
 
 
-def test_product_mk_holds_the_same_limits_as_the_python() -> None:
-    assert {int(p) for p in _mk_value("PF_RESTRICTED_PORTS").split()} == set(ports.CHROMIUM_RESTRICTED_PORTS)
-    assert int(_mk_value("PF_LAST_SLOT")) == ports.MAX_SLOT
+def test_ports_prints_the_ports_of_a_slot_as_a_table_and_as_env_lines() -> None:
+    table = run_config("ports", "--slot", 1)
+    slot_zero = run_config("ports", "--slot", 0, "--env")
+    slot_three = run_config("ports", "--slot", 3, "--env")
+
+    assert (table.returncode, table.stderr) == (0, "")
+    assert "6120  the API" in table.stdout and "6126  the web dev server, and a served build" in table.stdout
+    assert slot_zero.stdout.splitlines() == [  # slot 0 keeps the ports the template always used
+        *("PF_PORT_API=6100", "PF_PORT_POSTGRES=6101", "PF_PORT_REDIS=6102", "PF_PORT_FLOWER=6103"),
+        *("PF_PORT_MAILPIT_SMTP=6104", "PF_PORT_MAILPIT_UI=6105", "PF_PORT_WEB=6106", "PF_PORT_TEST_POSTGRES=6111"),
+    ]
+    assert {"PF_PORT_API=6160", "PF_PORT_WEB=6166", "PF_PORT_TEST_POSTGRES=6171"} <= set(slot_three.stdout.splitlines())
 
 
-def _make_ports(tmp_path: Path, slot: str) -> subprocess.CompletedProcess[str]:
-    (tmp_path / "productforge.env").write_text(f"PF_KITS=django-api\nPF_SLOT={slot}\nPF_NAME=demo_app\n")
-    (tmp_path / "Makefile").write_text("include productforge.env\ninclude product.mk\n")
-    (tmp_path / "product.mk").write_text(COMMON_MK.read_text())
-    return run_make(tmp_path, "ports")
+def test_every_slot_is_refused_or_owns_ports_no_browser_refuses_below_the_ephemeral_range(
+    restricted: set[int], last_slot: int
+) -> None:
+    usable = []
+    for slot in range(last_slot + 2):
+        result = run_config("ports", "--slot", slot, "--env")
+        block = range(6100 + 20 * slot, 6100 + 20 * slot + 20)
+        if result.returncode == 0:
+            ports = [int(line.split("=")[1]) for line in result.stdout.splitlines()]
+            assert set(ports) <= set(block) and not restricted & set(block), slot
+            usable.append(slot)
+        else:
+            assert slot > last_slot or restricted & set(block), slot  # refused only for a reason
+            assert result.stdout == "" and result.stderr.startswith("productforge-config: "), slot
+    assert {0, 1, last_slot} <= set(usable) and not {23, 28, 29, last_slot + 1} & set(usable)
+    assert max(6100 + 20 * slot + 19 for slot in usable) < 32768
+    assert "6665" in run_config("ports", "--slot", 28).stderr  # and says which port, or why
+    assert "the highest slot is 1332" in run_config("ports", "--slot", last_slot + 1).stderr
+    assert "whole number" in run_config("ports", "--slot", -1).stderr
 
 
-@pytest.mark.parametrize("slot", [0, 1, 2, 27, 30, 198, ports.MAX_SLOT])
-def test_make_works_out_the_same_ports_as_the_python(tmp_path: Path, slot: int) -> None:
-    result = _make_ports(tmp_path, str(slot))
+def test_make_works_out_the_same_ports_as_the_command_and_refuses_the_same_slots(
+    api_repo: Repo, last_slot: int
+) -> None:
+    api_repo.update()
+
+    for slot in (0, 1, 2, 27, 30, 198, last_slot):
+        api_repo.write("productforge.env", f"PF_KITS=python django-api\nPF_SLOT={slot}\nPF_NAME=fixture_api\n")
+        made = api_repo.make("ports")
+
+        first = 6100 + 20 * slot
+        assert made.returncode == 0, made.stderr
+        assert made.stdout.splitlines() == [
+            f"slot {slot}: {first}-{first + 19}",
+            *run_config("ports", "--slot", slot).stdout.splitlines(),
+        ]
+    for slot, message in (
+        ("28", "Chromium"),
+        ("x", "PF_SLOT must be a whole number"),
+        (str(last_slot + 1), "too large"),
+    ):
+        api_repo.write("productforge.env", f"PF_KITS=python django-api\nPF_SLOT={slot}\nPF_NAME=fixture_api\n")
+        made = api_repo.make("-n", "test")
+
+        assert made.returncode != 0 and message in made.stderr, slot
+        assert run_config("ports", "--slot", slot).returncode != 0
+
+
+def test_make_exports_the_values_the_command_prints(api_repo: Repo) -> None:
+    api_repo.update()
+    api_repo.write("env.mk", "include Makefile\nprint-env:\n\t@env\n")
+
+    result = api_repo.make("-f", "env.mk", "print-env")
+
+    exported = dict(line.split("=", 1) for line in result.stdout.splitlines() if line.startswith("PF_"))
     assert result.returncode == 0, result.stderr
-    expected = ports.table(slot)
-    first = ports.block(slot)[0]
-    assert result.stdout.splitlines() == [f"slot {slot}: {first}-{first + 19}", *expected]
-
-
-@pytest.mark.parametrize("slot", [23, 28, 29, 199])
-def test_make_refuses_the_same_restricted_slots(tmp_path: Path, slot: int) -> None:
-    result = _make_ports(tmp_path, str(slot))
-    assert result.returncode != 0
-    assert "Chromium" in result.stderr
-
-
-@pytest.mark.parametrize("slot", ["08", "-1", "x", "1333", "3.5"])
-def test_make_refuses_a_slot_that_is_not_a_whole_number_in_range(tmp_path: Path, slot: str) -> None:
-    result = _make_ports(tmp_path, slot)
-    assert result.returncode != 0
-    assert "PF_SLOT" in result.stderr
+    ports = run_config("ports", "--slot", 3, "--env").stdout.splitlines()
+    assert sorted(f"{k}={v}" for k, v in exported.items() if k.startswith("PF_PORT_")) == sorted(ports)
+    assert exported["PF_NAME"] == exported["PF_DJANGO_PROJECT"] == exported["PF_POSTGRES_DB"] == "fixture_api"

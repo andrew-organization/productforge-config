@@ -13,7 +13,8 @@ import pytest
 
 from productforge_config import cli, github
 
-FAKE_GH = Path(__file__).parent / "fixtures" / "fake_gh.py"
+from .conftest import run_config
+
 REPO = "andrew-organization/example"
 
 SETTINGS = github._bundled_github_settings()
@@ -40,14 +41,14 @@ def _mismatched_workflow_permissions() -> dict[str, Any]:
 
 
 @pytest.fixture
-def gh_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def gh_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, shipped: Path):
     """Installs the stubbed `gh` onto PATH and returns a helper to seed
     its state and read back the calls it recorded.
     """
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     fake_gh_path = bin_dir / "gh"
-    fake_gh_path.write_text(FAKE_GH.read_text())
+    fake_gh_path.write_text((shipped / "tests" / "fixtures" / "fake_gh.py").read_text())
     fake_gh_path.chmod(fake_gh_path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
 
     state_path = tmp_path / "state.json"
@@ -171,11 +172,12 @@ def test_private_repo_skips_the_ruleset_on_check_and_apply(gh_state) -> None:
         rulesets=[],
     )
 
-    diffs = github.check(REPO)
-    assert not any("ruleset" in line for line in diffs)
+    checked = run_config("github", "check", "--repo", REPO)
+    assert checked.returncode == 1 and "repository." in checked.stdout and "ruleset" not in checked.stdout
 
-    actions = github.apply(REPO)
-    assert any("skipped" in line and "private" in line for line in actions)
+    applied = run_config("github", "apply", "--repo", REPO)
+    assert applied.returncode == 0
+    assert "skipped" in applied.stdout and "private" in applied.stdout
 
     calls = gh_state.calls()
     assert not any("/rulesets" in c["endpoint"] for c in calls)
@@ -185,15 +187,6 @@ def test_private_repo_skips_the_ruleset_on_check_and_apply(gh_state) -> None:
     state = gh_state.state()
     assert state["repo"] == {"private": True, **SETTINGS["repository"]}
     assert state["workflow_permissions"] == SETTINGS["actions_workflow_permissions"]
-
-
-def test_apply_returns_0_from_main(gh_state) -> None:
-    gh_state.seed(
-        repo={"private": True, **SETTINGS["repository"]},
-        workflow_permissions=dict(SETTINGS["actions_workflow_permissions"]),
-        rulesets=[],
-    )
-    assert cli.main(["github", "apply", "--repo", REPO]) == 0
 
 
 def _with_github_defaults(ruleset: dict) -> dict:

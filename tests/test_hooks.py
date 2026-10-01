@@ -1,157 +1,119 @@
-"""A smoke test of .pre-commit-hooks.yaml itself, via `pre-commit try-repo`
-against a small fixture file — proving the hook manifest here is valid and
-actually runs the tool it wraps, not just that update() edits text right.
+"""The hooks `.pre-commit-hooks.yaml` publishes, run by pre-commit for real against throwaway repositories.
+
+Pre-commit clones a copy of the manifest and its package (`hook_source`), never the checkout, and installs
+each tool into the run's shared toolchain home (`hook_toolchain`); the repository a hook runs in, its
+files, its git configuration and its identity are the case's own.
 """
 
-import os
+import re
 import subprocess
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).parent.parent
+import pytest
+import yaml
+
+from .conftest import git, pre_commit, run_config
 
 
-def test_trailing_whitespace_hook_runs_and_fixes(tmp_path: Path) -> None:
-    target = tmp_path / "has_trailing_whitespace.txt"
-    target.write_text("a line with trailing whitespace   \n")
+def consumer(root: Path, hook_source: Path, hooks: list[str]) -> Path:
+    """A git repository whose pre-commit config takes `hooks` from the hook source."""
+    root.mkdir(parents=True, exist_ok=True)
+    git(root, "init", "-q", "-b", "main")
+    revision = git(hook_source, "rev-parse", "HEAD").stdout.strip()
+    config = {"repos": [{"repo": str(hook_source), "rev": revision, "hooks": [{"id": hook} for hook in hooks]}]}
+    (root / ".pre-commit-config.yaml").write_text(yaml.safe_dump(config))
+    git(root, "add", ".pre-commit-config.yaml")
+    git(root, "commit", "-q", "-m", "config")
+    return root
 
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "pre_commit",
-            "try-repo",
-            str(REPO_ROOT),
-            "trailing-whitespace",
-            "--files",
-            str(target),
-        ],
-        # try-repo needs a git repository underfoot for its own bookkeeping —
-        # this repository's own checkout, not the throwaway tmp_path the
-        # target file lives in (an absolute path, so cwd doesn't affect it).
-        cwd=REPO_ROOT,
-        capture_output=True,
-        text=True,
+
+def statuses(output: str) -> dict[str, str]:
+    """Each hook's name and its Passed, Failed or Skipped, from pre-commit's report."""
+    return {m.group(1): m.group(2) for m in re.finditer(r"^(.+?)\.{2,}(Passed|Failed|Skipped)", output, re.MULTILINE)}
+
+
+def test_the_manifest_hooks_run_the_tools_they_wrap(tmp_path: Path, hook_source: Path, hook_toolchain: Path) -> None:
+    repo = consumer(
+        tmp_path / "consumer",
+        hook_source,
+        ["trailing-whitespace", "end-of-file-fixer", "yamllint", "taplo-format", "shellcheck"],
     )
+    files = {
+        "has_trailing_whitespace.txt": "a line with trailing whitespace   \n",
+        "no_newline.json": "{}",
+        "good.yaml": "---\nkey: value\n",
+        "bad.yaml": "key: value\n",
+        "unformatted.toml": "a   =   1\n",
+        "script.sh": "#!/usr/bin/env bash\necho $1\n",
+    }
+    for name, text in files.items():
+        (repo / name).write_text(text)
 
-    # try-repo exits non-zero when a hook makes a fix — that's the hook working.
-    assert result.returncode != 0, result.stdout + result.stderr
-    assert target.read_text() == "a line with trailing whitespace\n"
+    result = pre_commit(repo, hook_toolchain, "run", "--files", *files)
+
+    assert result.returncode != 0, result.stdout + result.stderr  # fixers that fix fail, as any fixer does
+    report = statuses(result.stdout)
+    assert (repo / "has_trailing_whitespace.txt").read_text() == "a line with trailing whitespace\n"
+    assert report["trailing whitespace"] == "Failed"
+    assert (repo / "no_newline.json").read_text() == "{}\n"
+    assert report["fix end of files"] == "Failed"  # outside a commit it fixes and fails
+    assert (repo / "unformatted.toml").read_text() == "a = 1\n"
+    assert report["yamllint"] == "Failed"  # strict: a missing document start fails, as a trailing space would
+    assert "bad.yaml" in result.stdout and "good.yaml" not in result.stdout
+    assert report["shellcheck"] == "Failed" and "SC2086" in result.stdout
 
 
-def _try_hook(hook: str, target: Path) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [sys.executable, "-m", "pre_commit", "try-repo", str(REPO_ROOT), hook, "--files", str(target)],
-        cwd=REPO_ROOT,
-        capture_output=True,
-        text=True,
+def test_checkmake_passes_the_makefile_init_writes(tmp_path: Path, hook_source: Path, hook_toolchain: Path) -> None:
+    product = tmp_path / "product"
+    assert (
+        run_config(
+            "init", "--kind", "web", "--name", "acme_web", "--slot", "1", "--version", "v1.2.3", "--path", product
+        ).returncode
+        == 0
     )
+    repo = consumer(tmp_path / "consumer", hook_source, ["checkmake"])
+    (repo / "Makefile").write_text((product / "Makefile").read_text())
 
-
-def test_yamllint_hook_runs_strictly(tmp_path: Path) -> None:
-    good = tmp_path / "good.yaml"
-    # Outside a repository with its .yamllint, yamllint's defaults apply,
-    # which want a document start.
-    good.write_text("---\nkey: value\n")
-    bad = tmp_path / "bad.yaml"
-    bad.write_text("key: value   \n")
-
-    assert _try_hook("yamllint", good).returncode == 0
-    assert _try_hook("yamllint", bad).returncode != 0
-
-
-def test_taplo_format_hook_runs_and_fixes(tmp_path: Path) -> None:
-    target = tmp_path / "unformatted.toml"
-    target.write_text("a   =   1\n")
-
-    result = _try_hook("taplo-format", target)
-
-    # taplo exits cleanly once it has formatted, and pre-commit sees no
-    # change outside its own repository, so the file itself is the proof.
-    assert "taplo format" in result.stdout, result.stdout + result.stderr
-    assert target.read_text() == "a = 1\n"
-
-
-def test_shellcheck_hook_runs(tmp_path: Path) -> None:
-    target = tmp_path / "script.sh"
-    target.write_text("#!/usr/bin/env bash\necho $1\n")
-
-    result = _try_hook("shellcheck", target)
-
-    assert result.returncode != 0
-    assert "SC2086" in result.stdout
-
-
-def _without_ci() -> dict[str, str]:
-    return {k: v for k, v in os.environ.items() if k not in ("CI", "GIT_INDEX_FILE")}
-
-
-def test_end_of_file_fixer_fails_outside_a_commit(tmp_path: Path) -> None:
-    target = tmp_path / "no_newline.json"
-    target.write_text("{}")
-
-    result = subprocess.run(
-        [sys.executable, "-m", "pre_commit", "try-repo", str(REPO_ROOT), "end-of-file-fixer", "--files", str(target)],
-        cwd=REPO_ROOT,
-        capture_output=True,
-        text=True,
-        env=_without_ci(),
-    )
-
-    assert result.returncode != 0, result.stdout + result.stderr
-    assert target.read_text() == "{}\n"
-
-
-def test_end_of_file_fixer_stages_its_fix_inside_a_commit(tmp_path: Path) -> None:
-    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
-    target = tmp_path / "no_newline.json"
-    target.write_text("{}")
-    subprocess.run(["git", "add", "no_newline.json"], cwd=tmp_path, check=True)
-    # git hands every commit hook the index it's committing, as GIT_INDEX_FILE.
-    env = _without_ci() | {"GIT_INDEX_FILE": str(tmp_path / ".git" / "index")}
-
-    result = subprocess.run(
-        # Called directly: try-repo builds its own throwaway repository with git, which a
-        # GIT_INDEX_FILE pointing elsewhere would break. The manifest is proven above.
-        [sys.executable, "-m", "productforge_config.final_newline", "no_newline.json"],
-        cwd=tmp_path,
-        capture_output=True,
-        text=True,
-        env=env,
-    )
+    result = pre_commit(repo, hook_toolchain, "run", "--files", "Makefile")
 
     assert result.returncode == 0, result.stdout + result.stderr
-    staged = subprocess.run(["git", "show", ":no_newline.json"], cwd=tmp_path, capture_output=True, text=True)
-    assert staged.stdout == "{}\n"
+    assert statuses(result.stdout) == {"checkmake": "Passed"}
 
 
-def test_end_of_file_fixer_still_fails_inside_a_commit_in_ci(tmp_path: Path) -> None:
-    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
-    (tmp_path / "no_newline.json").write_text("{}")
-    subprocess.run(["git", "add", "no_newline.json"], cwd=tmp_path, check=True)
-    env = _without_ci() | {"GIT_INDEX_FILE": str(tmp_path / ".git" / "index"), "CI": "true"}
+def test_end_of_file_fixer_stages_its_fix_inside_a_commit_and_fails_there_in_ci(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    git(tmp_path, "init", "-q", "-b", "main")
+    # git hands every commit hook the index it is committing, as GIT_INDEX_FILE
+    monkeypatch.setenv("GIT_INDEX_FILE", str(tmp_path / ".git" / "index"))
 
-    result = subprocess.run(
-        # Called directly: try-repo builds its own throwaway repository with git, which a
-        # GIT_INDEX_FILE pointing elsewhere would break. The manifest is proven above.
-        [sys.executable, "-m", "productforge_config.final_newline", "no_newline.json"],
-        cwd=tmp_path,
-        capture_output=True,
-        text=True,
-        env=env,
-    )
+    def fix() -> subprocess.CompletedProcess[str]:
+        (tmp_path / "no_newline.json").write_text("{}")
+        git(tmp_path, "add", "no_newline.json")
+        return subprocess.run(
+            [sys.executable, "-m", "productforge_config.final_newline", "no_newline.json"],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+        )
 
-    assert result.returncode != 0, result.stdout + result.stderr
+    monkeypatch.setenv("CI", "true")
+    in_ci = fix()
+    monkeypatch.delenv("CI")
+    in_a_commit = fix()
+
+    assert in_ci.returncode != 0 and in_ci.stdout == "Fixing no_newline.json\n"
+    assert in_a_commit.returncode == 0, in_a_commit.stdout + in_a_commit.stderr
+    assert git(tmp_path, "show", ":no_newline.json").stdout == "{}\n"  # the fix is staged, so the commit carries it
 
 
-def test_django_mypy_hook_is_a_system_hook_over_the_projects_own_environment() -> None:
-    import yaml
+def test_the_django_mypy_hook_is_a_system_hook_over_the_projects_own_environment(shipped: Path) -> None:
+    hooks = {hook["id"]: hook for hook in yaml.safe_load((shipped / ".pre-commit-hooks.yaml").read_text())}
 
-    hooks = {hook["id"]: hook for hook in yaml.safe_load((REPO_ROOT / ".pre-commit-hooks.yaml").read_text())}
     hook = hooks["django-mypy"]
-    assert hook["language"] == "system"
-    assert hook["types"] == ["python"]
-    assert "uv run mypy" in hook["entry"]
-    assert "PYTHONPATH=api" in hook["entry"]
+
+    assert hook["language"] == "system" and hook["types"] == ["python"]
+    assert "uv run mypy" in hook["entry"] and "PYTHONPATH=api" in hook["entry"]
     assert "--config-file=pyproject.toml" in hook["entry"]
     assert hook["entry"].rstrip().endswith("--")  # bash -c '…' -- receives the filenames as "$@"
