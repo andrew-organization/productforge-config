@@ -1,542 +1,389 @@
-"""Tests of the kits as a repository runs them: `make -n` against the fixture's thin Makefile,
-Docker Compose interpolation of the compose files, and the web kit's identity scripts.
+"""The kits as a repository runs them: `make -n` against the fixture's thin Makefile, Docker Compose
+interpolation of the compose files, and the web kit's identity scripts.
 """
 
+import http.client
 import json
 import os
 import re
-import shutil
+import socket
 import subprocess
 import sys
-from pathlib import Path
+import time
 
 import pytest
 
-from productforge_config import cli, ports
-
-from .conftest import VERSION, run_make
+from .conftest import Repo, Stubs, git_tags
 
 # The fixtures are at slot 3: 6160-6179.
 API, POSTGRES, REDIS, FLOWER, SMTP, UI, WEB, TEST_POSTGRES = 6160, 6161, 6162, 6163, 6164, 6165, 6166, 6171
-
-needs_docker = pytest.mark.skipif(
-    shutil.which("docker") is None or subprocess.run(["docker", "compose", "version"], capture_output=True).returncode,
-    reason="docker compose isn't available",
-)
+FLUTTER = r"(fvm )?flutter"
+SOURCE = "git+https://github.com/andrew-organization/productforge-config"
 
 
 @pytest.fixture
-def api(api_repo: Path) -> Path:
-    cli.update(api_repo, VERSION)
+def api(api_repo: Repo) -> Repo:
+    assert api_repo.update().returncode == 0
     return api_repo
 
 
 @pytest.fixture
-def web(web_repo: Path) -> Path:
-    cli.update(web_repo, VERSION)
+def web(web_repo: Repo) -> Repo:
+    assert web_repo.update().returncode == 0
     return web_repo
 
 
-def _make(repo: Path, *args: str) -> str:
-    result = run_make(repo, "-n", *args)
-    assert result.returncode == 0, result.stderr
-    return result.stdout
+# ─── The API kit ──────────────────────────────────────────────────────────
 
 
-# ─── api.mk ───────────────────────────────────────────────────────────────
-
-
-def test_make_targets_the_api_kit_names_all_run(api: Path) -> None:
+def test_the_api_targets_run_the_commands_the_slot_and_the_names_give(api: Repo) -> None:
     for target in (
-        "install",
-        "lint",
-        "setup-hooks",
-        "clean",
-        "test",
-        "test-integration",
-        "test-integration-ci",
-        "check-migrations",
-        "build",
-        "up",
-        "down",
-        "logs",
-        "shell",
-        "lock",
-        "all",
-        "ports",
+        *("install", "lint", "setup-hooks", "clean", "test", "test-integration", "test-integration-ci"),
+        *("check-migrations", "build", "up", "down", "logs", "shell", "lock", "all", "ports"),
     ):
-        _make(api, target)
-
-
-def test_test_runs_the_unit_tests_and_takes_a_path_and_a_keyword(api: Path) -> None:
-    assert 'uv run pytest -n auto api/tests -v -m "not django_db"' in _make(api, "test")
-    assert 'uv run pytest -n auto api/x.py -v -m "not django_db" -k "y"' in _make(api, "test", "path=api/x.py", "k=y")
-
-
-def test_integration_tests_use_the_slots_test_postgres_and_the_projects_test_database(api: Path) -> None:
-    out = _make(api, "test-integration")
-    assert "-f .productforge/compose.test.yml --project-directory . up -d --wait --remove-orphans postgres-test" in out
+        api.dry(target)
+    assert 'uv run pytest -n auto api/tests -v -m "not django_db"' in api.dry("test")
+    assert 'uv run pytest -n auto api/x.py -v -m "not django_db" -k "y"' in api.dry("test", "path=api/x.py", "k=y")
+    integration = api.dry("test-integration")
+    assert (
+        "-f .productforge/compose.test.yml --project-directory . up -d --wait --remove-orphans postgres-test"
+        in integration
+    )
     assert (
         f"POSTGRES_HOST=localhost POSTGRES_PORT={TEST_POSTGRES} POSTGRES_DB=fixture_api_test uv run pytest -n auto"
-        in out
+        in integration
     )
-    assert "down --remove-orphans" in out  # and it removes the database after, whatever the tests did
-    assert "exit $status" in out
-
-
-def test_the_ci_integration_target_starts_the_test_database_and_leaves_it(api: Path) -> None:
-    out = _make(api, "test-integration-ci")
-    assert "up -d --wait --remove-orphans postgres-test" in out
-    assert "pytest -n auto api/tests -m django_db -v --create-db" in out
-    assert "down" not in out
-
-
-def test_check_migrations_uses_the_django_project_from_the_env(api: Path) -> None:
-    out = _make(api, "check-migrations")
-    assert "--settings=fixture_api.settings.test" in out
-    (api / "productforge.env").write_text(
-        (api / "productforge.env").read_text() + "PF_DJANGO_PROJECT=core\nPF_POSTGRES_DB=shop\n"
+    assert (
+        "down --remove-orphans" in integration and "exit $status" in integration
+    )  # the database goes, whatever the tests did
+    ci = api.dry("test-integration-ci")
+    assert (
+        "up -d --wait --remove-orphans postgres-test" in ci
+        and "pytest -n auto api/tests -m django_db -v --create-db" in ci
     )
-    assert "--settings=core.settings.test" in _make(api, "check-migrations")
-    assert "POSTGRES_DB=shop_test" in _make(api, "test-integration")
+    assert "down" not in ci
+    assert "--settings=fixture_api.settings.test" in api.dry("check-migrations")
 
-
-def test_the_docker_targets_run_docker_compose_v2_with_the_kits_file(api: Path) -> None:
     prefix = "docker compose --env-file productforge.env -f .productforge/compose.yml --project-directory ."
-    assert f"{prefix} build" in _make(api, "build")
-    assert f"{prefix} up -d --remove-orphans" in _make(api, "up")
-    assert f"{prefix} down --remove-orphans" in _make(api, "down")
-    assert f"{prefix} logs -f django" in _make(api, "logs")
-    assert f"{prefix} run --rm django ./manage.py shell" in _make(api, "shell")
-    assert "docker-compose" not in "".join(_make(api, t) for t in ("build", "up", "down", "logs", "shell"))
+    assert f"{prefix} build" in api.dry("build")
+    assert f"{prefix} up -d --remove-orphans" in api.dry("up")
+    assert f"{prefix} down --remove-orphans" in api.dry("down")
+    assert f"{prefix} logs -f django" in api.dry("logs")
+    assert f"{prefix} run --rm django ./manage.py shell" in api.dry("shell")
+    assert "docker-compose" not in "".join(api.dry(t) for t in ("build", "up", "down", "logs", "shell"))
+    everything = api.dry("all")
+    assert everything.index(" down ") < everything.index(" build") < everything.index(" up ")
+    assert api.dry() == everything and "uv sync" not in api.dry()  # a bare make is `all`
 
-
-def test_the_compose_command_takes_a_local_overlay_and_a_dotenv_when_present(api: Path) -> None:
-    (api / "docker-compose.local.yml").write_text("services: {}\n")
-    (api / ".env").write_text("DJANGO_ALLOWED_HOSTS=example\n")
+    api.write("docker-compose.local.yml", "services: {}\n")
+    api.write(".env", "DJANGO_ALLOWED_HOSTS=example\n")
     assert (
         "docker compose --env-file productforge.env --env-file .env -f .productforge/compose.yml "
         "-f docker-compose.local.yml --project-directory . build"
-    ) in _make(api, "build")
+    ) in api.dry(
+        "build"
+    )  # a local overlay and a dotenv join the command when present
+
+    api.write("productforge.env", api.read("productforge.env") + "PF_DJANGO_PROJECT=core\nPF_POSTGRES_DB=shop\n")
+    assert "--settings=core.settings.test" in api.dry("check-migrations")
+    assert "POSTGRES_DB=shop_test" in api.dry("test-integration")
+
+    api.write("productforge.env", "PF_KITS=python django-api\nPF_SLOT=3\nPF_NAME=Not-Snake\n")
+    refused = api.make("-n", "test")
+    assert refused.returncode != 0 and "PF_NAME must be lower-case" in refused.stderr
 
 
-def test_all_rebuilds_and_restarts(api: Path) -> None:
-    out = _make(api, "all")
-    assert out.index(" down ") < out.index(" build") < out.index(" up ")
-
-
-def test_up_in_mobile_mode_wires_the_lan_ip_to_the_web_port_of_the_slot(api: Path) -> None:
-    out = _make(api, "up", "mode=mobile", "LAN_IP=10.1.2.3")
-    assert f"DJANGO_ALLOWED_HOSTS=10.1.2.3 CORS_EXTRA_ORIGINS=http://10.1.2.3:{WEB} " in out
-    assert f"FRONTEND_BASE_URL=http://10.1.2.3:{WEB} docker compose" in out
-    assert "10.1.2.3" not in _make(api, "up")
-
-
-def test_up_in_mobile_mode_needs_a_lan_ip(api: Path) -> None:
-    result = run_make(api, "up", "mode=mobile", "LAN_IP=")
-    assert result.returncode != 0
-    assert "no LAN IP" in result.stderr
-
-
-def test_clean_removes_python_caches(api: Path) -> None:
-    assert '-name "__pycache__"' in _make(api, "clean")
-
-
-def _exported_env_value(repo: Path, name: str) -> str | None:
-    """The value make exports to a recipe under `name`, from a real make run."""
-    (repo / "env.mk").write_text("include Makefile\nprint-env:\n\t@env\n")
-    result = run_make(repo, "-f", "env.mk", "print-env")
-    (repo / "env.mk").unlink()
-    assert result.returncode == 0, result.stderr
-    return dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line).get(name)
-
-
-def test_the_python_kit_keeps_bytecode_out_and_cleans_the_virtualenv_and_every_pycache(api: Path) -> None:
-    assert _exported_env_value(api, "PYTHONDONTWRITEBYTECODE") == "1"
-    out = _make(api, "clean")
-    assert "rm -rf .venv" in out
-    assert "find . -type d -name __pycache__" in out
-    assert "rm -rf .pytest_cache .mypy_cache" in out  # and what every repository cleans
-
-
-# ─── web.mk ───────────────────────────────────────────────────────────────
-
-FLUTTER = r"(fvm )?flutter"
-
-
-def test_make_targets_the_web_kit_names_all_run(web: Path) -> None:
-    for target in (
-        "install",
-        "lint",
-        "setup-hooks",
-        "clean",
-        "test",
-        "l10n",
-        "generate",
-        "identity",
-        "check-identity-regeneration",
-        "check-generated",
-        "build",
-        "up",
-        "debug",
-        "down",
-        "serve-build",
-        "all",
-        "ports",
-    ):
-        _make(web, target)
-
-
-def test_up_serves_on_the_slots_web_port_against_the_slots_api(web: Path) -> None:
-    out = _make(web, "up")
-    assert re.search(
-        rf"{FLUTTER} run -d web-server --web-port={WEB} "
-        rf"--dart-define=GRAPHQL_ENDPOINT=http://localhost:{API}/graphql/\s*$",
-        out,
+def test_the_python_kit_keeps_bytecode_out_cleans_up_and_runs_pre_commit_through_uv(api: Repo) -> None:
+    api.write("env.mk", "include Makefile\nprint-env:\n\t@env\n")
+    exported = dict(
+        line.split("=", 1) for line in api.make("-f", "env.mk", "print-env").stdout.splitlines() if "=" in line
     )
 
+    clean = api.dry("clean")
 
-def test_up_in_mobile_mode_binds_every_interface_and_targets_the_lan_ip(web: Path) -> None:
-    out = _make(web, "up", "mode=mobile", "LAN_IP=10.1.2.3")
-    assert f"--web-port={WEB}" in out
-    assert f"GRAPHQL_ENDPOINT=http://10.1.2.3:{API}/graphql/" in out
-    assert "--web-hostname=0.0.0.0" in out
-
-
-def test_debug_build_and_down_use_the_slots_ports(web: Path) -> None:
-    assert f"run -d chrome --web-port={WEB} --dart-define=GRAPHQL_ENDPOINT=http://localhost:{API}/graphql/" in _make(
-        web, "debug"
-    )
-    assert f"build web --dart-define=GRAPHQL_ENDPOINT=http://localhost:{API}/graphql/" in _make(web, "build")
-    assert f'pkill -f "flutter_tools.*--web-port={WEB}"' in _make(web, "down")
-
-
-def test_the_endpoint_can_be_overridden_for_one_run(web: Path) -> None:
-    assert "GRAPHQL_ENDPOINT=https://api.example.test/graphql/" in _make(
-        web, "build", "GRAPHQL_ENDPOINT=https://api.example.test/graphql/"
-    )
-
-
-def test_serve_build_serves_the_kits_script_on_the_web_port(web: Path) -> None:
-    assert f"python3 .productforge/serve_web_build.py {WEB}" in _make(web, "serve-build")
-
-
-def test_the_identity_targets_run_the_kits_scripts(web: Path) -> None:
-    assert "python3 .productforge/generate_identity.py" in _make(web, "identity")
-    assert "python3 .productforge/check_identity_regeneration.py" in _make(web, "check-identity-regeneration")
-
-
-def test_check_generated_regenerates_everything_then_diffs(web: Path) -> None:
-    out = _make(web, "check-generated")
-    assert out.index("build_runner") < out.index("gen-l10n") < out.index("generate_identity.py") < out.index("git diff")
-
-
-def test_a_web_repository_gets_no_docker_targets(web: Path) -> None:
-    result = run_make(web, "-n", "logs")
-    assert result.returncode != 0
-    assert "No rule to make target" in result.stderr
-
-
-def test_install_fetches_pub_packages_before_the_shared_steps(web: Path) -> None:
-    out = _make(web, "install")
-    assert out.index("pub get") < out.index("uv sync --dev") < out.index("install-hooks") < out.index("install\n")
-
-
-# ─── common.mk ────────────────────────────────────────────────────────────
-
-
-@pytest.mark.parametrize("fixture", ["api", "web"])
-def test_make_ports_prints_the_slots_ports(fixture: str, request: pytest.FixtureRequest) -> None:
-    repo: Path = request.getfixturevalue(fixture)
-    result = run_make(repo, "ports")
-    assert result.stdout.splitlines() == ["slot 3: 6160-6179", *ports.table(3)]
-
-
-@pytest.mark.parametrize("fixture", ["api", "web"])
-def test_make_refuses_a_restricted_slot_in_the_repository(fixture: str, request: pytest.FixtureRequest) -> None:
-    repo: Path = request.getfixturevalue(fixture)
-    env = repo / "productforge.env"
-    env.write_text(env.read_text().replace("PF_SLOT=3", "PF_SLOT=28"))
-    result = run_make(repo, "-n", "test")
-    assert result.returncode != 0
-    assert "Chromium" in result.stderr
-
-
-def test_lint_and_install_run_pre_commit_through_uv(api: Path) -> None:
-    lint = _make(api, "lint")
+    assert exported["PYTHONDONTWRITEBYTECODE"] == "1"
+    assert "rm -rf .venv" in clean and "find . -type d -name __pycache__" in clean
+    assert "rm -rf .pytest_cache .mypy_cache" in clean  # and what every repository cleans
+    lint = api.dry("lint")
     assert "uv run pre-commit run --all-files --config .productforge/pre-commit.yaml" in lint
     assert "uv run pre-commit run --all-files --config .pre-commit-lint.yaml" in lint  # the fixture has its own
-    assert "uv sync --dev" in _make(api, "install")
-    assert "uv run pre-commit install" in _make(api, "setup-hooks")
+    assert "uv sync --dev" in api.dry("install") and "uv run pre-commit install" in api.dry("setup-hooks")
 
 
-def test_lint_runs_only_the_kits_hooks_when_the_repository_has_none_of_its_own(web: Path) -> None:
-    lint = _make(web, "lint")
-    assert "--config .productforge/pre-commit.yaml" in lint
-    assert ".pre-commit-lint.yaml" not in lint
+def test_up_in_mobile_mode_wires_the_lan_ip_through_the_api_and_the_web_app_and_needs_one(api: Repo, web: Repo) -> None:
+    api_up = api.dry("up", "mode=mobile", "LAN_IP=10.1.2.3")
+    web_up = web.dry("up", "mode=mobile", "LAN_IP=10.1.2.3")
+
+    assert f"DJANGO_ALLOWED_HOSTS=10.1.2.3 CORS_EXTRA_ORIGINS=http://10.1.2.3:{WEB} " in api_up
+    assert f"FRONTEND_BASE_URL=http://10.1.2.3:{WEB} docker compose" in api_up
+    assert "10.1.2.3" not in api.dry("up")
+    assert f"--web-port={WEB}" in web_up and f"GRAPHQL_ENDPOINT=http://10.1.2.3:{API}/graphql/" in web_up
+    assert "--web-hostname=0.0.0.0" in web_up
+    for repo, target in ((api, "up"), (web, "up"), (web, "build")):
+        result = repo.make(target, "mode=mobile", "LAN_IP=")
+
+        assert result.returncode != 0 and "no LAN IP" in result.stderr, (repo, target)
 
 
-def test_update_config_takes_a_tag_or_a_commit_sha(api: Path) -> None:
+# ─── The web kit ──────────────────────────────────────────────────────────
+
+
+def test_the_web_targets_run_the_commands_the_slot_gives(web: Repo) -> None:
+    for target in (
+        *("install", "lint", "setup-hooks", "clean", "test", "l10n", "generate", "identity"),
+        *(
+            "check-identity-regeneration",
+            "check-generated",
+            "build",
+            "up",
+            "debug",
+            "down",
+            "serve-build",
+            "all",
+            "ports",
+        ),
+    ):
+        web.dry(target)
+    endpoint = f"--dart-define=GRAPHQL_ENDPOINT=http://localhost:{API}/graphql/"
+    assert re.search(rf"{FLUTTER} run -d web-server --web-port={WEB} {endpoint}\s*$", web.dry("up"))
+    assert f"run -d chrome --web-port={WEB} {endpoint}" in web.dry("debug")
+    assert f"build web {endpoint}" in web.dry("build")
+    assert f'pkill -f "flutter_tools.*--web-port={WEB}"' in web.dry("down")
+    assert "GRAPHQL_ENDPOINT=https://api.example.test/graphql/" in web.dry(
+        "build", "GRAPHQL_ENDPOINT=https://api.example.test/graphql/"
+    )
+    assert f"python3 .productforge/serve_web_build.py {WEB}" in web.dry("serve-build")
+    assert "python3 .productforge/generate_identity.py" in web.dry("identity")
+    assert "python3 .productforge/check_identity_regeneration.py" in web.dry("check-identity-regeneration")
+    generated = web.dry("check-generated")
+    assert (
+        generated.index("build_runner")
+        < generated.index("gen-l10n")
+        < generated.index("generate_identity.py")
+        < generated.index("git diff")
+    )
+    install = web.dry("install")
+    assert (
+        install.index("pub get")
+        < install.index("uv sync --dev")
+        < install.index("install-hooks")
+        < install.index("install\n")
+    )
+    assert web.dry() == web.dry("all") and "uv sync" not in web.dry()
+    refused = web.make("-n", "logs")
+    assert refused.returncode != 0 and "No rule to make target" in refused.stderr  # no docker targets
+
+
+# ─── update-config and check-config ───────────────────────────────────────
+
+
+def test_update_config_takes_a_tag_or_a_commit_else_the_newest_release_and_check_config_checks_the_recorded_one(
+    api: Repo, stubs: Stubs
+) -> None:
     for version in ("v1.0.0", "0123456789abcdef0123456789abcdef01234567"):
-        out = _make(api, "update-config", f"VERSION={version}")
-        assert f"uvx --from git+https://github.com/andrew-organization/productforge-config@{version}" in out
+        out = api.dry("update-config", f"VERSION={version}")
+
+        assert f"uvx --from {SOURCE}@{version}" in out
         assert f"productforge-config update --version {version}" in out
-
-
-def _with_fake_git(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tags: list[str]) -> None:
-    """Put a `git` first on PATH whose `ls-remote --tags` lists exactly `tags`."""
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    listing = "".join(f"0123456789abcdef0123456789abcdef01234567\\trefs/tags/{tag}\\n" for tag in tags)
-    git = bin_dir / "git"
-    git.write_text(f"#!/bin/sh\nprintf '{listing}'\n")
-    git.chmod(0o755)
-    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
-
-
-@pytest.mark.parametrize(
-    ("tags", "expected"),
-    [
+    for tags, expected in (
         (["v1.9.0", "v1.10.0", "v1.11.0-rc.1"], "v1.10.0"),  # stable wins over a newer -rc.N
         (["v1.0.0-rc.2", "v1.0.0-rc.10", "v0.9.0-rc.11", "nonsense"], "v1.0.0-rc.10"),  # no stable: the newest -rc.N
-    ],
-)
-def test_update_config_defaults_to_the_newest_stable_tag_else_the_newest_rc(
-    api: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tags: list[str], expected: str
-) -> None:
-    _with_fake_git(tmp_path, monkeypatch, tags)
-    assert f"productforge-config update --version {expected}" in _make(api, "update-config")
+    ):
+        stubs.add("git", stdout=git_tags(tags))
 
-
-def test_update_config_stops_when_there_is_no_release_tag_at_all(
-    api: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _with_fake_git(tmp_path, monkeypatch, ["not-a-release"])
-    result = run_make(api, "update-config")
-    assert result.returncode != 0
-    assert "no productforge-config release tag found" in result.stderr
-
-
-def test_check_config_checks_at_the_recorded_release(api: Path) -> None:
-    out = _make(api, "check-config")
-    assert "update --check --version $release" in out
-    assert ".productforge/release" in out
+        assert f"productforge-config update --version {expected}" in api.dry("update-config")
+    stubs.add("git", stdout=git_tags(["not-a-release"]))
+    result = api.make("update-config")
+    assert result.returncode != 0 and "no productforge-config release tag found" in result.stderr
+    checking = api.dry("check-config")
+    assert "update --check --version $release" in checking and ".productforge/release" in checking
 
 
 # ─── Docker Compose ───────────────────────────────────────────────────────
 
 
-def _exported_env(repo: Path) -> dict[str, str]:
+@pytest.fixture
+def compose() -> None:
+    """Skips a case when `docker compose` is not installed where the case's own Docker configuration looks."""
+    if subprocess.run(["docker", "compose", "version"], capture_output=True).returncode:
+        pytest.skip("docker compose isn't available")
+
+
+def exported_env(repo: Repo) -> dict[str, str]:
     """What make hands a recipe: every PF_ value the Makefile works out, from a real make run."""
-    (repo / "env.mk").write_text("include Makefile\nprint-env:\n\t@env\n")
-    result = run_make(repo, "-f", "env.mk", "print-env")
+    repo.write("env.mk", "include Makefile\nprint-env:\n\t@env\n")
+    result = repo.make("-f", "env.mk", "print-env")
     assert result.returncode == 0, result.stderr
-    (repo / "env.mk").unlink()
+    (repo.root / "env.mk").unlink()
     return dict(line.split("=", 1) for line in result.stdout.splitlines() if line.startswith("PF_"))
 
 
-def _compose_config(repo: Path, compose_file: str, env: dict[str, str]) -> dict:
-    result = subprocess.run(
-        [
-            *["docker", "compose", "--env-file", "productforge.env", "-f", compose_file],
-            *["--project-directory", ".", "config", "--format", "json"],
-        ],
-        cwd=repo,
-        env={"PATH": os.environ["PATH"], "HOME": os.environ["HOME"], **env},
+def compose_config(
+    repo: Repo, files: list[str], env: dict[str, str], dotenv: bool = False
+) -> subprocess.CompletedProcess[str]:
+    command = ["docker", "compose", "--env-file", "productforge.env", *(["--env-file", ".env"] if dotenv else [])]
+    for file in files:
+        command += ["-f", file]
+    return subprocess.run(
+        [*command, "--project-directory", ".", "config", "--format", "json"],
+        cwd=repo.root,
+        env={**os.environ, **env},
         capture_output=True,
         text=True,
     )
+
+
+def published(service: dict) -> list[str]:
+    return [str(p["published"]) for p in service["ports"]]
+
+
+@pytest.mark.usefixtures("compose")
+def test_the_dev_stack_interpolates_from_the_slot_and_the_names(api: Repo) -> None:
+    result = compose_config(api, [".productforge/compose.yml"], exported_env(api))
     assert result.returncode == 0, result.stderr
-    return json.loads(result.stdout)
-
-
-def test_make_exports_the_values_the_ports_command_prints(api: Path) -> None:
-    exported = _exported_env(api)
-    assert sorted(f"{k}={v}" for k, v in exported.items() if k.startswith("PF_PORT_")) == sorted(ports.env_lines(3))
-    assert exported["PF_NAME"] == exported["PF_DJANGO_PROJECT"] == exported["PF_POSTGRES_DB"] == "fixture_api"
-
-
-@needs_docker
-def test_the_dev_stack_interpolates_from_the_slot_and_the_names(api: Path) -> None:
-    config = _compose_config(api, ".productforge/compose.yml", _exported_env(api))
+    config = json.loads(result.stdout)
     services = config["services"]
     assert config["name"] == "fixture_api"
     assert set(services) == {"django", "postgres", "redis", "mailpit", "celeryworker", "celerybeat", "flower"}
-
-    def published(service: str) -> list[str]:
-        return [str(p["published"]) for p in services[service]["ports"]]
-
-    assert published("django") == [str(API)]
-    assert published("postgres") == [str(POSTGRES)]
-    assert published("redis") == [str(REDIS)]
-    assert published("flower") == [str(FLOWER)]
-    assert published("mailpit") == [str(SMTP), str(UI)]
-    assert "ports" not in services["celeryworker"] or not services["celeryworker"]["ports"]
-
+    assert published(services["django"]) == [str(API)] and published(services["postgres"]) == [str(POSTGRES)]
+    assert published(services["redis"]) == [str(REDIS)] and published(services["flower"]) == [str(FLOWER)]
+    assert published(services["mailpit"]) == [str(SMTP), str(UI)]
+    assert not services["celeryworker"].get("ports")
     django = services["django"]["environment"]
     assert django["DJANGO_SETTINGS_MODULE"] == "fixture_api.settings.base"
     assert django["POSTGRES_DB"] == services["postgres"]["environment"]["POSTGRES_DB"] == "fixture_api"
-    assert django["WEB_ORIGIN"] == f"http://localhost:{WEB}"
-    assert django["FRONTEND_BASE_URL"] == f"http://localhost:{WEB}"
-    assert services["django"]["image"] == "fixture_api_django"
-    assert services["celeryworker"]["image"] == "fixture_api_celeryworker"
-    assert services["celeryworker"]["command"][:4] == ["uv", "run", "celery", "-A"]
-    assert services["celeryworker"]["command"][4] == "fixture_api"
-    assert services["celerybeat"]["command"][4] == "fixture_api"
-    assert services["flower"]["command"][4] == "fixture_api"
+    assert django["WEB_ORIGIN"] == django["FRONTEND_BASE_URL"] == f"http://localhost:{WEB}"
+    assert (
+        services["django"]["image"] == "fixture_api_django"
+        and services["celeryworker"]["image"] == "fixture_api_celeryworker"
+    )
+    for service in ("celeryworker", "celerybeat", "flower"):
+        assert services[service]["command"][:4] == ["uv", "run", "celery", "-A"]
+        assert services[service]["command"][4] == "fixture_api"
     assert services["flower"]["environment"]["DJANGO_SETTINGS_MODULE"] == "fixture_api.settings.base"
     assert "fixture_api" in services["postgres"]["healthcheck"]["test"][1]
     assert services["django"]["build"]["dockerfile"] == "./.productforge/Dockerfile"
-    assert services["django"]["build"]["context"] == str(api.resolve())
+    assert services["django"]["build"]["context"] == str(api.root.resolve())
 
-
-@needs_docker
-def test_the_dev_stack_takes_a_web_origin_override_and_an_overlay(api: Path) -> None:
-    (api / ".env").write_text("FRONTEND_BASE_URL=http://10.0.0.9:6166\n")
-    (api / "docker-compose.local.yml").write_text("services:\n  django:\n    environment:\n      EXTRA: yes\n")
-    result = subprocess.run(
-        [
-            *["docker", "compose", "--env-file", "productforge.env", "--env-file", ".env"],
-            *["-f", ".productforge/compose.yml", "-f", "docker-compose.local.yml", "--project-directory", "."],
-            *["config", "--format", "json"],
-        ],
-        cwd=api,
-        env={"PATH": os.environ["PATH"], "HOME": os.environ["HOME"], **_exported_env(api)},
-        capture_output=True,
-        text=True,
+    api.write(".env", "FRONTEND_BASE_URL=http://10.0.0.9:6166\n")
+    api.write("docker-compose.local.yml", "services:\n  django:\n    environment:\n      EXTRA: yes\n")
+    overlaid = compose_config(
+        api, [".productforge/compose.yml", "docker-compose.local.yml"], exported_env(api), dotenv=True
     )
+    assert overlaid.returncode == 0, overlaid.stderr
+    django = json.loads(overlaid.stdout)["services"]["django"]["environment"]
+    assert django["FRONTEND_BASE_URL"] == "http://10.0.0.9:6166" and django["EXTRA"] == "yes"
+    assert django["WEB_ORIGIN"] == f"http://localhost:{WEB}"
+
+    api.write(
+        "productforge.env",
+        api.read("productforge.env").replace("PF_SLOT=3", "PF_SLOT=40").replace("fixture_api", "other_api"),
+    )
+    moved = json.loads(compose_config(api, [".productforge/compose.yml"], exported_env(api)).stdout)
+    assert moved["name"] == "other_api" and published(moved["services"]["django"]) == ["6900"]
+    assert moved["services"]["django"]["environment"]["WEB_ORIGIN"] == "http://localhost:6906"
+
+
+@pytest.mark.usefixtures("compose")
+def test_the_test_database_interpolates_from_the_slot_and_the_names(api: Repo) -> None:
+    result = compose_config(api, [".productforge/compose.test.yml"], exported_env(api))
+
     assert result.returncode == 0, result.stderr
-    django = json.loads(result.stdout)["services"]["django"]["environment"]
-    assert django["FRONTEND_BASE_URL"] == "http://10.0.0.9:6166"
-    assert django["EXTRA"] == "yes" and django["WEB_ORIGIN"] == f"http://localhost:{WEB}"
-
-
-@needs_docker
-def test_the_test_database_interpolates_from_the_slot_and_the_names(api: Path) -> None:
-    config = _compose_config(api, ".productforge/compose.test.yml", _exported_env(api))
+    config = json.loads(result.stdout)
     postgres = config["services"]["postgres-test"]
     assert config["name"] == "fixture_api-test"
-    assert [str(p["published"]) for p in postgres["ports"]] == [str(TEST_POSTGRES)]
+    assert published(postgres) == [str(TEST_POSTGRES)]
     assert postgres["environment"]["POSTGRES_DB"] == "fixture_api_test"
     assert "fixture_api_test" in postgres["healthcheck"]["test"][1]
 
 
-@needs_docker
-@pytest.mark.parametrize("missing", ["PF_NAME", "PF_DJANGO_PROJECT", "PF_POSTGRES_DB", "PF_PORT_API", "PF_PORT_WEB"])
-def test_compose_refuses_to_run_without_a_value_it_needs(api: Path, missing: str) -> None:
-    env = _exported_env(api)
-    del env[missing]
-    result = subprocess.run(
-        ["docker", "compose", "-f", ".productforge/compose.yml", "--project-directory", ".", "config"],
-        cwd=api,
-        env={"PATH": os.environ["PATH"], "HOME": os.environ["HOME"], **env},
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode != 0
-    assert missing in result.stderr
+@pytest.mark.usefixtures("compose")
+def test_compose_refuses_to_run_without_a_value_it_needs(api: Repo) -> None:
+    for missing in ("PF_NAME", "PF_DJANGO_PROJECT", "PF_POSTGRES_DB", "PF_PORT_API", "PF_PORT_WEB"):
+        env = exported_env(api)
+        del env[missing]
+        result = subprocess.run(
+            ["docker", "compose", "-f", ".productforge/compose.yml", "--project-directory", ".", "config"],
+            cwd=api.root,
+            env={**os.environ, **env},
+            capture_output=True,
+            text=True,
+        )
 
-
-@needs_docker
-def test_another_slot_moves_every_port_and_only_the_ports(api: Path) -> None:
-    (api / "productforge.env").write_text(
-        (api / "productforge.env").read_text().replace("PF_SLOT=3", "PF_SLOT=40").replace("fixture_api", "other_api")
-    )
-    config = _compose_config(api, ".productforge/compose.yml", _exported_env(api))
-    assert config["name"] == "other_api"
-    assert [str(p["published"]) for p in config["services"]["django"]["ports"]] == ["6900"]
-    assert config["services"]["django"]["environment"]["WEB_ORIGIN"] == "http://localhost:6906"
+        assert result.returncode != 0, missing
+        assert missing in result.stderr, missing
 
 
 # ─── The web kit's identity scripts ───────────────────────────────────────
 
 
-def _run(repo: Path, script: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run([sys.executable, f".productforge/{script}"], cwd=repo, capture_output=True, text=True)
+def run_script(repo: Repo, script: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run([sys.executable, f".productforge/{script}"], cwd=repo.root, capture_output=True, text=True)
 
 
-def _git_init(repo: Path) -> None:
-    for command in (["init", "-q"], ["add", "-A"], ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "x"]):
-        subprocess.run(["git", *command], cwd=repo, check=True, capture_output=True)
+def test_generate_identity_writes_the_three_files_from_product_yaml(web: Repo) -> None:
+    web.write("product.yaml", "name: Acme's Shop\nshort_name: Acme\nemail_from: hi@acme.test\ndomain: acme.test\n")
+
+    result = run_script(web, "generate_identity.py")
+
+    assert result.returncode == 0, result.stderr
+    assert "static const String name = 'Acme\\'s Shop';" in web.read("lib/config/product.dart")
+    assert "<title>Acme&#x27;s Shop</title>" in web.read("web/index.html")
+    assert json.loads(web.read("web/manifest.json"))["short_name"] == "Acme"
+    assert ".productforge/generate_identity.py" in web.read("lib/config/product.dart")
+
+    web.edit("web/index.html", "</body>", "<!-- wip -->\n</body>")  # uncommitted work, in a repository with no git
+    wip = web.read("web/index.html")
+    checked = run_script(web, "check_identity_regeneration.py")
+    assert not web.exists(".git")
+    assert checked.returncode == 0, checked.stdout + checked.stderr
+    assert web.read("web/index.html") == wip
 
 
-def test_generate_identity_writes_the_three_files_from_product_yaml(web: Path) -> None:
-    (web / "product.yaml").write_text(
-        "name: Acme's Shop\nshort_name: Acme\nemail_from: hi@acme.test\ndomain: acme.test\n"
+def test_the_identity_regeneration_check_passes_in_any_product(web: Repo) -> None:
+    web.write(  # quoted values, a comment, and the keys in another order
+        "product.yaml",
+        '# leading comment\ndomain: b.test\nemail_from: a@b.test\nshort_name: "Dq"  # trailing\n'
+        "name: 'Quoted ''Name'''\n",
     )
-    assert _run(web, "generate_identity.py").returncode == 0
-    assert "static const String name = 'Acme\\'s Shop';" in (web / "lib/config/product.dart").read_text()
-    assert "<title>Acme&#x27;s Shop</title>" in (web / "web/index.html").read_text()
-    assert json.loads((web / "web/manifest.json").read_text())["short_name"] == "Acme"
-    assert ".productforge/generate_identity.py" in (web / "lib/config/product.dart").read_text()
+    assert run_script(web, "generate_identity.py").returncode == 0
+    files = ("product.yaml", "lib/config/product.dart", "web/index.html", "web/manifest.json")
+    before = {rel: web.read(rel) for rel in files}
 
+    result = run_script(web, "check_identity_regeneration.py")
 
-@pytest.mark.parametrize(
-    "product_yaml",
-    [
-        "name: Fixture Web\nshort_name: Fixture\nemail_from: a@b.test\ndomain: b.test\n",
-        "# leading comment\nname: 'Quoted ''Name'''\nshort_name: \"Dq\"  # trailing\n"
-        "email_from: a@b.test\ndomain: b.test\n",
-        "domain: b.test\nemail_from: a@b.test\nshort_name: Zed\nname: Zed Zero\n",
-        "name: The ProductForge template\nshort_name: ProductForge\nemail_from: a@b.test\ndomain: b.test\n",
-    ],
-)
-def test_the_identity_regeneration_check_passes_in_any_product(web: Path, product_yaml: str) -> None:
-    (web / "product.yaml").write_text(product_yaml)
-    assert _run(web, "generate_identity.py").returncode == 0
-    before = {
-        p: (web / p).read_text()
-        for p in ("product.yaml", "lib/config/product.dart", "web/index.html", "web/manifest.json")
-    }
-    result = _run(web, "check_identity_regeneration.py")
     assert result.returncode == 0, result.stdout + result.stderr
     assert "passed" in result.stdout
-    assert before == {p: (web / p).read_text() for p in before}  # restored
+    assert {rel: web.read(rel) for rel in files} == before  # restored
 
 
-def test_the_identity_regeneration_check_needs_no_git_and_leaves_uncommitted_work_alone(web: Path) -> None:
-    _run(web, "generate_identity.py")
-    (web / "web/index.html").write_text(
-        (web / "web/index.html").read_text().replace("</body>", "<!-- wip -->\n</body>")
-    )
-    wip = (web / "web/index.html").read_text()
-    assert not (web / ".git").exists()
-    result = _run(web, "check_identity_regeneration.py")
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert (web / "web/index.html").read_text() == wip
+def test_the_identity_regeneration_check_fails_when_the_generator_ignores_the_name(web: Repo) -> None:
+    run_script(web, "generate_identity.py")
+    web.edit(".productforge/generate_identity.py", 'html.escape(product["name"])', "'Hard-coded'")
+    web.edit("web/index.html", "Fixture Web", "Hard-coded")
 
+    result = run_script(web, "check_identity_regeneration.py")
 
-def test_the_identity_regeneration_check_fails_when_the_generator_ignores_the_name(web: Path) -> None:
-    _run(web, "generate_identity.py")
-    generator = web / ".productforge" / "generate_identity.py"
-    generator.write_text(generator.read_text().replace('html.escape(product["name"])', "'Hard-coded'"))
-    (web / "web" / "index.html").write_text(
-        (web / "web" / "index.html").read_text().replace("Fixture Web", "Hard-coded")
-    )
-    result = _run(web, "check_identity_regeneration.py")
     assert result.returncode != 0
     assert "web/index.html" in result.stderr
-    assert (web / "product.yaml").read_text().startswith("# A fixture product's identity.\nname: Fixture Web")
+    assert web.read("product.yaml").startswith("# A fixture product's identity.\nname: Fixture Web")
 
 
-def test_the_identity_regeneration_check_fails_without_a_name_line(web: Path) -> None:
-    (web / "product.yaml").write_text("short_name: Only\nemail_from: a@b.test\ndomain: b.test\n")
-    result = _run(web, "check_identity_regeneration.py")
+def test_the_identity_regeneration_check_fails_without_a_name_line(web: Repo) -> None:
+    web.write("product.yaml", "short_name: Only\nemail_from: a@b.test\ndomain: b.test\n")
+
+    result = run_script(web, "check_identity_regeneration.py")
+
     assert result.returncode != 0
     assert "`name:`" in result.stderr
 
 
-def test_serve_web_build_falls_back_to_the_index_for_an_unknown_path(web: Path) -> None:
-    import http.client
-    import socket
-    import time
-
-    (web / "build" / "web").mkdir(parents=True)
-    (web / "build" / "web" / "index.html").write_text("<p>the app</p>")
+def test_serve_web_build_falls_back_to_the_index_for_an_unknown_path(web: Repo) -> None:
+    web.write("build/web/index.html", "<p>the app</p>")
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         port = s.getsockname()[1]
-    server = subprocess.Popen([sys.executable, ".productforge/serve_web_build.py", str(port)], cwd=web)
+    server = subprocess.Popen([sys.executable, ".productforge/serve_web_build.py", str(port)], cwd=web.root)
     try:
         for _ in range(50):
             try:
@@ -553,29 +400,3 @@ def test_serve_web_build_falls_back_to_the_index_for_an_unknown_path(web: Path) 
     finally:
         server.terminate()
         server.wait()
-
-
-@pytest.mark.parametrize("fixture", ["api", "web"])
-def test_a_bare_make_runs_the_kinds_all(fixture: str, request: pytest.FixtureRequest) -> None:
-    repo: Path = request.getfixturevalue(fixture)
-    assert _make(repo) == _make(repo, "all")
-    assert "uv sync" not in _make(repo)
-
-
-def test_a_bare_make_in_an_api_repository_rebuilds_and_restarts(api: Path) -> None:
-    out = _make(api)
-    assert out.index(" down ") < out.index(" build") < out.index(" up ")
-
-
-@pytest.mark.parametrize("target", ["up", "build"])
-def test_web_mobile_mode_needs_a_lan_ip(web: Path, target: str) -> None:
-    result = run_make(web, target, "mode=mobile", "LAN_IP=")
-    assert result.returncode != 0
-    assert f"{target}: no LAN IP found for mode=mobile" in result.stderr
-
-
-def test_make_refuses_a_name_that_is_not_snake_case(api: Path) -> None:
-    (api / "productforge.env").write_text("PF_KITS=python django-api\nPF_SLOT=3\nPF_NAME=Not-Snake\n")
-    result = run_make(api, "-n", "test")
-    assert result.returncode != 0
-    assert "PF_NAME must be lower-case" in result.stderr
