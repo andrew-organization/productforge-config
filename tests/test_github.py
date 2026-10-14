@@ -131,11 +131,15 @@ def test_each_variant_applies_its_rulesets_and_a_second_apply_changes_nothing(gh
         assert gh_state.state() == first_state
         assert _silent(run_config("github", "check", "--repo", REPO, "--variant", variant))
         assert [r["name"] for r in first_state["rulesets"]] == names
-        assert not any(c["method"] == "POST" for c in gh_state.calls())
+        assert [c for c in gh_state.calls() if c["method"] != "GET"] == []
         assert not any("properties" in c["endpoint"] for c in first_calls)
 
+        patch_call = next(c for c in first_calls if c["method"] == "PATCH" and c["endpoint"] == f"repos/{REPO}")
+        assert patch_call["body"] == SETTINGS["repository"]
+        assert "unchanged" in second.stdout and second.stdout.count("unchanged") == 2 + len(names)
+
         sent = _sent_rulesets(first_calls)
-        assert ("created" in first.stdout, "updated" in second.stdout) == (True, True)
+        assert ("created" in first.stdout, "updated" in second.stdout) == (True, False)
         if variant == "block-only":
             assert set(sent) == {BLOCK}
             assert sent[BLOCK]["conditions"]["ref_name"]["include"] == ["refs/heads/main"]
@@ -145,9 +149,6 @@ def test_each_variant_applies_its_rulesets_and_a_second_apply_changes_nothing(gh
         assert _required_checks(sent[MAIN]) == [DEFAULT_CHECK[variant]]
         assert sent[MAIN]["bypass_actors"] == ([OWNER_BYPASS] if variant == "publishes" else [])
         assert sent[TAGS]["bypass_actors"] == []
-
-    patch_call = next(c for c in gh_state.calls() if c["method"] == "PATCH" and c["endpoint"] == f"repos/{REPO}")
-    assert patch_call["body"] == SETTINGS["repository"]
 
 
 def test_required_check_overrides_the_variants_default(gh_state) -> None:
@@ -210,7 +211,9 @@ def test_product_is_set_and_compared_only_when_given(gh_state) -> None:
 
     gh_state.reset_calls()
     run_config("github", "apply", "--repo", REPO, "--variant", "block-only", "--product", "productforge")
-    patch = next(c for c in gh_state.calls() if c["endpoint"] == f"repos/{REPO}/properties/values")
+    patch = next(
+        c for c in gh_state.calls() if c["endpoint"] == f"repos/{REPO}/properties/values" and c["method"] != "GET"
+    )
     assert patch["method"] == "PATCH"
     assert patch["body"] == {"properties": [{"property_name": "product", "value": "productforge"}]}
     assert gh_state.state()["properties"] == [
@@ -277,6 +280,67 @@ def test_an_existing_ruleset_on_a_public_repository_is_updated_in_place(gh_state
     ]
     assert gh_state.state()["rulesets"][0]["enforcement"] == "active"
     assert len(gh_state.state()["rulesets"]) == 2
+
+
+def test_a_second_apply_with_a_product_writes_nothing_and_reports_unchanged(gh_state) -> None:
+    gh_state.seed(
+        repo={"private": True, **_mismatched_repo_fields()},
+        workflow_permissions=_mismatched_workflow_permissions(),
+        rulesets=[],
+        properties=[{"property_name": "product", "value": "other"}],
+    )
+    first = run_config("github", "apply", "--repo", REPO, "--product", "productforge")
+    assert "product: set to 'productforge'" in first.stdout
+
+    gh_state.reset_calls()
+    second = run_config("github", "apply", "--repo", REPO, "--product", "productforge")
+
+    assert second.returncode == 0
+    assert [c for c in gh_state.calls() if c["method"] != "GET"] == []
+    assert second.stdout.splitlines() == [
+        "repository: unchanged",
+        "actions_workflow_permissions: unchanged",
+        "product: unchanged",
+        f"ruleset '{MAIN}': unchanged",
+        f"ruleset '{TAGS}': unchanged",
+    ]
+
+
+def test_an_organisation_ruleset_of_the_same_name_is_never_matched(gh_state) -> None:
+    inherited = {"id": 9, "name": MAIN, "source_type": "Organization", "target": "branch", "enforcement": "active"}
+    gh_state.seed_matching(properties=[])
+    state = gh_state.state()
+    gh_state.seed(**{**state, "rulesets": [inherited]})
+
+    assert f"ruleset '{MAIN}': missing" in run_config("github", "check", "--repo", REPO).stdout
+    gh_state.reset_calls()
+    applied = run_config("github", "apply", "--repo", REPO)
+
+    assert f"ruleset '{MAIN}': created" in applied.stdout
+    writes = [(c["method"], c["endpoint"]) for c in gh_state.calls() if c["method"] != "GET"]
+    assert ("PUT", f"repos/{REPO}/rulesets/9") not in writes
+    assert ("POST", f"repos/{REPO}/rulesets") in writes
+    listing = next(c for c in gh_state.calls() if c["endpoint"].startswith(f"repos/{REPO}/rulesets?"))
+    assert listing["endpoint"] == f"repos/{REPO}/rulesets?includes_parents=false"
+
+
+def test_the_order_of_rules_and_status_checks_is_not_drift(gh_state) -> None:
+    gh_state.seed_matching(properties=[{"property_name": "product", "value": "productforge"}])
+    run_config("github", "apply", "--repo", REPO, "--required-check", "build", "--required-check", "lint")
+    state = gh_state.state()
+    for ruleset in state["rulesets"]:
+        ruleset["rules"].reverse()
+        for rule in ruleset["rules"]:
+            if rule["type"] == "required_status_checks":
+                rule["parameters"]["required_status_checks"].reverse()
+    gh_state.seed(**state)
+    args = ("--repo", REPO, "--required-check", "build", "--required-check", "lint")
+
+    assert run_config("github", "check", *args).stdout == ""
+    gh_state.reset_calls()
+    second = run_config("github", "apply", *args)
+    assert [c for c in gh_state.calls() if c["method"] != "GET"] == []
+    assert "updated" not in second.stdout
 
 
 def test_check_reports_nothing_for_an_owner_bypass_read_back_with_a_null_actor_id(gh_state) -> None:

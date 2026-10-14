@@ -14,6 +14,9 @@ State may also set `rulesets_error` (a message every rulesets call then fails
 with, as `gh` prints a 403) and `no_product_property` (the organisation has
 no property `product`, so setting it fails).
 
+A rulesets list GET honours `includes_parents=false` (an inherited ruleset
+carries `source_type: "Organization"`) and `--paginate --slurp`.
+
 Understands exactly the shapes github.py's `_run_gh` produces: `api
 [-X METHOD] <endpoint> [--input -]`, with a JSON body on stdin when
 `--input -` is given.
@@ -53,7 +56,11 @@ def main() -> int:
         method = rest[1]
         rest = rest[2:]
 
-    endpoint = rest[0]
+    paginate = "--paginate" in rest
+    slurp = "--slurp" in rest
+    rest = [a for a in rest if a not in ("--paginate", "--slurp")]
+    raw_endpoint = rest[0]
+    endpoint, _, query = raw_endpoint.partition("?")
     rest = rest[1:]
 
     body = None
@@ -65,7 +72,7 @@ def main() -> int:
 
     state_path = os.environ["FAKE_GH_STATE"]
     calls_path = os.environ.get("FAKE_GH_CALLS")
-    _log_call(calls_path, method, endpoint, body)
+    _log_call(calls_path, method, raw_endpoint, body)
     state = _load_state(state_path)
 
     parts = endpoint.split("/")
@@ -114,11 +121,20 @@ def main() -> int:
             return 1
         if len(tail) == 1:
             if method == "GET":
+                # Like GitHub, an inherited ruleset is listed unless includes_parents=false
                 summaries = [
-                    {"id": r["id"], "name": r["name"], "target": r.get("target"), "enforcement": r.get("enforcement")}
+                    {
+                        "id": r["id"],
+                        "name": r["name"],
+                        "source_type": r.get("source_type", "Repository"),
+                        "target": r.get("target"),
+                        "enforcement": r.get("enforcement"),
+                    }
                     for r in state["rulesets"]
+                    if "includes_parents=false" not in query or r.get("source_type", "Repository") == "Repository"
                 ]
-                print(json.dumps(summaries))
+                # --paginate --slurp: one array holding each page's array
+                print(json.dumps([summaries] if paginate and slurp else summaries))
             elif method == "POST":
                 new_id = max((r["id"] for r in state["rulesets"]), default=0) + 1
                 created = dict(body or {})

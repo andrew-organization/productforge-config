@@ -30,10 +30,11 @@ custom property `product`, and the variant's rulesets, each created if no
 ruleset of that name exists and updated in place by name if one does, on a
 repository of any visibility. Where GitHub answers that the plan offers no
 rules for the repository, the rules are reported as skipped with GitHub's
-reason and the rest still applies. Every call sends the file's full values
-rather than only the ones that differ, so running it twice in a row is a
-no-op the second time: idempotent by construction, not by pre-checking a
-diff first.
+reason and the rest still applies. Each part is read first and written only
+when it differs (the repository fields and Actions permissions, the
+`product` value, each ruleset's compared fields), and reported `unchanged`
+otherwise, so a second run sends no write at all. Only the repository's own
+rulesets are matched by name, never one inherited from the organisation.
 
 An unknown variant, or a required check given with `block-only`, is refused
 (`GithubError`) before any `gh` call.
@@ -105,6 +106,20 @@ def _post(endpoint: str, body: dict[str, Any]) -> Any:
     return _run_gh(["api", "-X", "POST", endpoint, "--input", "-"], body)
 
 
+def _get_all(endpoint: str) -> list[Any]:
+    """Every item of a paginated list endpoint, across all pages."""
+    pages = _run_gh(["api", "--paginate", "--slurp", endpoint]) or []
+    return [item for page in pages for item in (page if isinstance(page, list) else [page])]
+
+
+def _own_rulesets(repo: str) -> dict[str, dict[str, Any]]:
+    """The repository's own rulesets by name: an organisation ruleset
+    inherited into it is never listed, so one of the same name is never matched.
+    """
+    summaries = _get_all(f"repos/{repo}/rulesets?includes_parents=false")
+    return {s.get("name"): s for s in summaries if s.get("source_type", "Repository") == "Repository"}
+
+
 def _get_ruleset(repo: str, ruleset_id: int) -> dict[str, Any]:
     return _get(f"repos/{repo}/rulesets/{ruleset_id}")
 
@@ -120,6 +135,38 @@ def _holds(live: Any, wanted: Any) -> bool:
     if isinstance(wanted, list):
         return isinstance(live, list) and len(live) == len(wanted) and all(map(_holds, live, wanted))
     return live == wanted
+
+
+def _canonical_rules(rules: Any) -> Any:
+    """`rules` in a canonical order — by type, and a status-check rule's
+    checks by context — so the order GitHub returns them in isn't drift.
+    """
+    if not isinstance(rules, list):
+        return rules
+    canonical = []
+    for rule in rules:
+        rule = copy.deepcopy(rule)
+        checks = rule.get("parameters", {}).get("required_status_checks") if isinstance(rule, dict) else None
+        if isinstance(checks, list):
+            rule["parameters"]["required_status_checks"] = sorted(checks, key=lambda c: c.get("context", ""))
+        canonical.append(rule)
+    return sorted(canonical, key=lambda r: r.get("type", "") if isinstance(r, dict) else "")
+
+
+def _ruleset_differences(live: dict[str, Any], wanted: dict[str, Any]) -> list[tuple[str, Any, Any]]:
+    """The compared fields of a ruleset whose live value doesn't hold the
+    wanted one, as (field, live, wanted).
+    """
+    differences = []
+    for key in _RULESET_FIELDS:
+        wanted_value, live_value = wanted.get(key), live.get(key)
+        if key == "bypass_actors":
+            wanted_value, live_value = _normalised_bypass_actors(wanted_value), _normalised_bypass_actors(live_value)
+        elif key == "rules":
+            wanted_value, live_value = _canonical_rules(wanted_value), _canonical_rules(live_value)
+        if not _holds(live_value, wanted_value):
+            differences.append((key, live_value, wanted_value))
+    return differences
 
 
 def _gh_reason(exc: subprocess.CalledProcessError) -> str:
@@ -239,7 +286,7 @@ def check_report(
         diffs.append(f"{PRODUCT_PROPERTY}: {live_text} -> {product!r}")
 
     try:
-        summaries = _get(f"repos/{repo}/rulesets") or []
+        by_name = _own_rulesets(repo)
     except subprocess.CalledProcessError as exc:
         reason = _rulesets_unavailable(exc)
         if reason is None:
@@ -247,20 +294,14 @@ def check_report(
         notes.append(f"ruleset: skipped ({reason})")
         return diffs, notes
 
-    by_name = {summary.get("name"): summary for summary in summaries}
     for name, ruleset in rulesets.items():
         summary = by_name.get(name)
         if summary is None:
             diffs.append(f"ruleset {name!r}: missing")
             continue
         existing = _get_ruleset(repo, summary["id"])
-        for key in _RULESET_FIELDS:
-            wanted = ruleset.get(key)
-            live = existing.get(key)
-            if key == "bypass_actors":
-                wanted, live = _normalised_bypass_actors(wanted), _normalised_bypass_actors(live)
-            if not _holds(live, wanted):
-                diffs.append(f"ruleset {name!r}.{key}: {live!r} -> {wanted!r}")
+        for key, live, wanted in _ruleset_differences(existing, ruleset):
+            diffs.append(f"ruleset {name!r}.{key}: {live!r} -> {wanted!r}")
 
     return diffs, notes
 
@@ -285,32 +326,43 @@ def apply(
     required_checks: list[str] | None = None,
 ) -> list[str]:
     """Apply settings/github.json's `variant` to `repo`, idempotently — safe
-    to run repeatedly, since every call sends the file's full values rather
-    than only a computed diff. Returns one line per action taken, for
-    reporting. Needs repository admin rights on `repo`.
+    to run repeatedly: each part is written only when it differs from the
+    live value, so a second run sends no write. Returns one line per part,
+    for reporting. Needs repository admin rights on `repo`.
     """
     settings = _bundled_github_settings()
     rulesets = _resolve(settings, variant, required_checks or [])
     actions = []
 
-    _patch(f"repos/{repo}", settings["repository"])
-    actions.append("repository: applied")
+    live_repo = _get(f"repos/{repo}")
+    if any(live_repo.get(key) != wanted for key, wanted in settings["repository"].items()):
+        _patch(f"repos/{repo}", settings["repository"])
+        actions.append("repository: applied")
+    else:
+        actions.append("repository: unchanged")
 
-    _put(f"repos/{repo}/actions/permissions/workflow", settings["actions_workflow_permissions"])
-    actions.append("actions_workflow_permissions: applied")
+    live_perms = _get(f"repos/{repo}/actions/permissions/workflow") or {}
+    if any(live_perms.get(key) != wanted for key, wanted in settings["actions_workflow_permissions"].items()):
+        _put(f"repos/{repo}/actions/permissions/workflow", settings["actions_workflow_permissions"])
+        actions.append("actions_workflow_permissions: applied")
+    else:
+        actions.append("actions_workflow_permissions: unchanged")
 
     if product is not None:
-        body = {"properties": [{"property_name": PRODUCT_PROPERTY, "value": product}]}
-        try:
-            _patch(f"repos/{repo}/properties/values", body)
-        except subprocess.CalledProcessError as exc:
-            raise GithubError(
-                f"couldn't set the organisation property {PRODUCT_PROPERTY!r} on {repo}: {_gh_reason(exc)}"
-            ) from exc
-        actions.append(f"{PRODUCT_PROPERTY}: set to {product!r}")
+        if _live_product(repo) == product:
+            actions.append(f"{PRODUCT_PROPERTY}: unchanged")
+        else:
+            body = {"properties": [{"property_name": PRODUCT_PROPERTY, "value": product}]}
+            try:
+                _patch(f"repos/{repo}/properties/values", body)
+            except subprocess.CalledProcessError as exc:
+                raise GithubError(
+                    f"couldn't set the organisation property {PRODUCT_PROPERTY!r} on {repo}: {_gh_reason(exc)}"
+                ) from exc
+            actions.append(f"{PRODUCT_PROPERTY}: set to {product!r}")
 
     try:
-        summaries = _get(f"repos/{repo}/rulesets") or []
+        by_name = _own_rulesets(repo)
     except subprocess.CalledProcessError as exc:
         reason = _rulesets_unavailable(exc)
         if reason is None:
@@ -318,14 +370,15 @@ def apply(
         actions.append(f"ruleset: skipped ({reason})")
         return actions
 
-    by_name = {summary.get("name"): summary for summary in summaries}
     for name, ruleset in rulesets.items():
         summary = by_name.get(name)
         if summary is None:
             _post(f"repos/{repo}/rulesets", ruleset)
             actions.append(f"ruleset {name!r}: created")
-        else:
+        elif _ruleset_differences(_get_ruleset(repo, summary["id"]), ruleset):
             _put(f"repos/{repo}/rulesets/{summary['id']}", ruleset)
             actions.append(f"ruleset {name!r}: updated")
+        else:
+            actions.append(f"ruleset {name!r}: unchanged")
 
     return actions
