@@ -12,6 +12,8 @@ CHECKS = {
     "web": ["check-generated", "check-identity-regeneration", "lint", "test", "check-config"],
 }
 
+RUNS_ON = "${{ fromJSON(vars.PF_RUNS_ON || '\"ubuntu-latest\"') }}"
+
 
 def load(shipped: Path, kind: str) -> dict:
     return yaml.safe_load((shipped / ".github" / "workflows" / f"ci-{kind}.yml").read_text())
@@ -32,7 +34,7 @@ def test_each_workflow_sets_up_from_this_repository_and_runs_make_targets_its_ki
         workflow, flat = load(shipped, kind), steps(shipped, kind)
 
         assert list(workflow[True]) == ["workflow_call"]  # YAML reads a bare `on` as True
-        assert workflow["jobs"]["ci"]["runs-on"] == "ubuntu-latest"
+        assert workflow["jobs"]["ci"]["runs-on"] == RUNS_ON
         checkout = next(s for s in flat if s.get("with", {}).get("path") == ".productforge-config")
         setup = next(s for s in flat if s.get("uses") == "./.productforge-config/actions/setup")
         assert checkout["uses"].startswith("actions/checkout@")
@@ -81,3 +83,14 @@ def test_the_setup_is_written_once_in_the_setup_action(shipped: Path) -> None:
             re.findall(r"uses: (\S+@[0-9a-f]{40})", (shipped / ".github" / "workflows" / f"ci-{kind}.yml").read_text())
         )
         assert pinned and all(ref.startswith("actions/checkout@") or ref in action_text for ref in pinned)
+
+
+def test_every_reusable_job_reads_the_runner_from_the_organisation_variable_and_this_repository_stays_hosted(
+    shipped: Path,
+) -> None:
+    workflows = shipped / ".github" / "workflows"
+    for name in ("ci-api.yml", "ci-web.yml", "release.yml"):
+        jobs = yaml.safe_load((workflows / name).read_text())["jobs"]
+        assert jobs and all(job["runs-on"] == RUNS_ON for job in jobs.values()), name
+    own = yaml.safe_load((workflows / "ci.yml").read_text())["jobs"]
+    assert all(job["runs-on"] == "ubuntu-latest" for job in own.values())  # public: hosted minutes are free
