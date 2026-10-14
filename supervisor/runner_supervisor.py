@@ -280,7 +280,14 @@ def remove_container(*, name: str, settings: Settings) -> None:
 
 
 def sweep(*, group_id: int, settings: Settings) -> None:
-    """Removes the registrations and containers a previous run left under this prefix."""
+    """Removes the containers and registrations a previous run left under this prefix.
+
+    Containers go first: one still running a job keeps its runner busy, and GitHub refuses to delete a busy runner.
+    """
+    listed = docker(args=["ps", "-aq", "--filter", f"label={LABEL}={settings.prefix}"], settings=settings)
+    for container in listed.stdout.split():
+        log(message=f"removing the leftover container {container}")
+        remove_container(name=container, settings=settings)
     stale = [
         r for r in group_runners(group_id=group_id, settings=settings) if r["name"].startswith(f"{settings.prefix}-")
     ]
@@ -288,10 +295,6 @@ def sweep(*, group_id: int, settings: Settings) -> None:
         log(message=f"removing the leftover registration {runner['name']}")
         if not delete_runner(runner_id=runner["id"], settings=settings):
             log(message=f"left the registration {runner['name']}, which GitHub still holds as busy")
-    listed = docker(args=["ps", "-aq", "--filter", f"label={LABEL}={settings.prefix}"], settings=settings)
-    for container in listed.stdout.split():
-        log(message=f"removing the leftover container {container}")
-        remove_container(name=container, settings=settings)
 
 
 def run_one(*, group_id: int, settings: Settings, stop: Stop) -> bool:

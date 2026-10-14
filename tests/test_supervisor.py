@@ -249,9 +249,13 @@ def test_start_removes_what_a_previous_run_left_under_its_prefix_only(host: Host
     host.wait_for(lambda: "rm -f old-container" in host.docker_calls)
     host.wait_for(lambda: "pf-leftover" not in endpoint.names)
     process.send_signal(signal.SIGTERM)
-    process.communicate(timeout=30)
+    out, _ = process.communicate(timeout=30)
     assert endpoint.names == ["someone-elses"]
     assert "ps -aq --filter label=productforge.runner-supervisor=pf" in host.docker_calls
+    # A leftover container still running a job keeps its runner busy, so it goes before the registration.
+    assert out.index("removing the leftover container old-container") < out.index(
+        "removing the leftover registration pf-leftover"
+    )
 
 
 def test_a_group_that_does_not_exist_is_refused_before_anything_is_registered(host: Host, endpoint: Endpoint) -> None:
