@@ -149,6 +149,12 @@
           "actor_type": "OrganizationAdmin",
           "bypass_mode": "always"
         }
+      ],
+      "deploy_key_bypass_actors": [
+        {
+          "actor_type": "DeployKey",
+          "bypass_mode": "always"
+        }
       ]
     },
     "block-only": {

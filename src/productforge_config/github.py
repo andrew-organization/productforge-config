@@ -9,12 +9,15 @@ that bundle them. A variant names the rulesets it applies and the
 environments it creates, may `extends` another (inheriting its
 rulesets, bypass actors and default required checks), and may add
 `bypass_actors` (written into the ruleset that requires a pull request to
-change `main`) or `required_checks` (the status checks that ruleset
+change `main`), `deploy_key_bypass_actors` (added to those only on request) or
+`required_checks` (the status checks that ruleset
 requires by default). The variants are `standard` (the default), `product`
 (`standard` requiring `ci / ci`, the name a job calling a reusable workflow
 reports, plus the `production` environment, whose deployment-branch policy
-is `main` alone), `publishes` (`standard` plus the owner as an always-bypass actor)
-and `block-only` (blocks rewriting and deleting `main`, requires no check).
+is `main` alone), `publishes` (`standard` plus the owner as an always-bypass actor and,
+where `bypass_deploy_keys` is given, the repository's deploy keys as a second one, for a
+repository whose release pushes with a deploy key) and `block-only` (blocks rewriting and
+deleting `main`, requires no check).
 
 `check(repo, ...)` is read-only: it reads the live repository through `gh
 api` and returns a line for each setting whose live value differs from the
@@ -49,7 +52,8 @@ on a plan without environments answers the environment calls with a 403, as
 it does the rulesets: the environment is then reported as skipped with
 GitHub's reason, like the rulesets, and `apply` still exits 0.
 
-An unknown variant, or a required check given with `block-only`, is refused
+An unknown variant, a required check given with `block-only`, or
+`bypass_deploy_keys` given with a variant that has no deploy-key bypass, is refused
 (`GithubError`) before any `gh` call.
 
 Both shell out to `gh api` rather than talking to the GitHub API
@@ -228,23 +232,36 @@ def _resolve_environments(settings: dict[str, Any], variant: str) -> dict[str, d
     return {name: copy.deepcopy(settings["environments"][name]) for name in names}
 
 
-def _resolve(settings: dict[str, Any], variant: str, required_checks: list[str]) -> dict[str, dict[str, Any]]:
+def _resolve(
+    settings: dict[str, Any], variant: str, required_checks: list[str], bypass_deploy_keys: bool = False
+) -> dict[str, dict[str, Any]]:
     """The rulesets `variant` applies, by name, as the full bodies to send:
     the variant's inherited bypass actors written into the ruleset that
     requires a pull request, and the required checks (the ones given, else
     the variant's default, else the file's) into each ruleset requiring
-    status checks. Refuses an unknown variant, or checks given to a variant
-    that requires none, before any `gh` call.
+    status checks. Where `bypass_deploy_keys` is given, the variant's deploy-key
+    bypass actors are added to its bypass actors. Refuses an unknown variant,
+    checks given to a variant that requires none, or the deploy-key bypass on
+    a variant with none, before any `gh` call.
     """
     chain = _variant_chain(settings, variant)
 
     ruleset_names: list[str] = []
     bypass_actors: list[dict[str, Any]] = []
+    deploy_key_actors: list[dict[str, Any]] = []
     default_checks: list[str] | None = None
     for layer in chain:
         ruleset_names = layer.get("rulesets", ruleset_names)
         bypass_actors = layer.get("bypass_actors", bypass_actors)
+        deploy_key_actors = layer.get("deploy_key_bypass_actors", deploy_key_actors)
         default_checks = layer.get("required_checks", default_checks)
+
+    if bypass_deploy_keys:
+        if not deploy_key_actors:
+            raise GithubError(
+                f"--bypass-deploy-keys can't be used with the {variant} variant, which has no such bypass"
+            )
+        bypass_actors = [*bypass_actors, *deploy_key_actors]
 
     rulesets = {}
     for ruleset_name in ruleset_names:
@@ -266,16 +283,27 @@ def _resolve(settings: dict[str, Any], variant: str, required_checks: list[str])
     return rulesets
 
 
+# Bypass actors GitHub reads back with `actor_id: null`, whatever was sent.
+_ID_LESS_ACTOR_TYPES = ("OrganizationAdmin", "DeployKey")
+
+
 def _normalised_bypass_actors(actors: Any) -> Any:
-    """`actors` with an `OrganizationAdmin` actor's id dropped: GitHub reads
-    it back with `actor_id: null`, so it is compared on its type and mode.
+    """`actors` with an `OrganizationAdmin` or `DeployKey` actor's id dropped,
+    since GitHub reads it back with `actor_id: null`, so it is compared on its
+    type and mode; and ordered by type, so the order GitHub lists them in
+    isn't drift.
     """
     if not isinstance(actors, list):
         return actors
-    return [
-        {k: v for k, v in actor.items() if k != "actor_id"} if actor.get("actor_type") == "OrganizationAdmin" else actor
+    normalised = [
+        (
+            {k: v for k, v in actor.items() if k != "actor_id"}
+            if actor.get("actor_type") in _ID_LESS_ACTOR_TYPES
+            else actor
+        )
         for actor in actors
     ]
+    return sorted(normalised, key=lambda actor: str(actor.get("actor_type", "")))
 
 
 def _environment_url(repo: str, name: str) -> str:
@@ -357,13 +385,14 @@ def check_report(
     variant: str = DEFAULT_VARIANT,
     product: str | None = None,
     required_checks: list[str] | None = None,
+    bypass_deploy_keys: bool = False,
 ) -> tuple[list[str], list[str]]:
     """The differences between settings/github.json's `variant` and the live
     `repo` (one line each) and the notes that are not differences. Read-only:
     no `gh api` call here writes anything.
     """
     settings = _bundled_github_settings()
-    rulesets = _resolve(settings, variant, required_checks or [])
+    rulesets = _resolve(settings, variant, required_checks or [], bypass_deploy_keys)
     live_repo = _get(f"repos/{repo}")
     diffs = []
     notes = []
@@ -436,12 +465,13 @@ def check(
     variant: str = DEFAULT_VARIANT,
     product: str | None = None,
     required_checks: list[str] | None = None,
+    bypass_deploy_keys: bool = False,
 ) -> list[str]:
     """Every setting `variant` states in settings/github.json whose live
     value on `repo` differs, as one line per difference. An empty list
     means `repo` already matches exactly.
     """
-    return check_report(repo, variant, product, required_checks)[0]
+    return check_report(repo, variant, product, required_checks, bypass_deploy_keys)[0]
 
 
 def apply(
@@ -449,6 +479,7 @@ def apply(
     variant: str = DEFAULT_VARIANT,
     product: str | None = None,
     required_checks: list[str] | None = None,
+    bypass_deploy_keys: bool = False,
 ) -> list[str]:
     """Apply settings/github.json's `variant` to `repo`, idempotently — safe
     to run repeatedly: each part is written only when it differs from the
@@ -456,7 +487,7 @@ def apply(
     for reporting. Needs repository admin rights on `repo`.
     """
     settings = _bundled_github_settings()
-    rulesets = _resolve(settings, variant, required_checks or [])
+    rulesets = _resolve(settings, variant, required_checks or [], bypass_deploy_keys)
     environments = _resolve_environments(settings, variant)
     actions = []
 
