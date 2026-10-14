@@ -1,0 +1,18 @@
+[Unit]
+Description=ProductForge ephemeral runner supervisor
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+User=pf-runner
+ExecStart=/usr/bin/python3 /opt/productforge-runner/runner_supervisor.py run \
+  --org YOUR-ORG --group YOUR-RUNNER-GROUP --labels pf \
+  --token-file /etc/productforge-runner/token
+Restart=always
+RestartSec=10
+# Stopping removes the running container and its registration within this time.
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target
