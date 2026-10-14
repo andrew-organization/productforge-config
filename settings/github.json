@@ -111,6 +111,20 @@
       ]
     }
   },
+  "environments": {
+    "production": {
+      "deployment_branch_policy": {
+        "protected_branches": false,
+        "custom_branch_policies": true
+      },
+      "branch_policies": [
+        {
+          "name": "main",
+          "type": "branch"
+        }
+      ]
+    }
+  },
   "variants": {
     "standard": {
       "rulesets": [
@@ -122,6 +136,9 @@
       "extends": "standard",
       "required_checks": [
         "ci / ci"
+      ],
+      "environments": [
+        "production"
       ]
     },
     "publishes": {

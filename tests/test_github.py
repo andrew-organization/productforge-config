@@ -24,6 +24,8 @@ BLOCK = "block-main-rewrites"
 RULESETS = {"standard": [MAIN, TAGS], "product": [MAIN, TAGS], "publishes": [MAIN, TAGS], "block-only": [BLOCK]}
 DEFAULT_CHECK = {"standard": "ci", "product": "ci / ci", "publishes": "ci"}
 OWNER_BYPASS = {"actor_id": 1, "actor_type": "OrganizationAdmin", "bypass_mode": "always"}
+PRODUCTION = "production"
+PRODUCTION_POLICY = {"protected_branches": False, "custom_branch_policies": True}
 NO_RULES = "Upgrade to GitHub Pro or make this repository public to enable this feature."
 
 
@@ -136,7 +138,7 @@ def test_each_variant_applies_its_rulesets_and_a_second_apply_changes_nothing(gh
 
         patch_call = next(c for c in first_calls if c["method"] == "PATCH" and c["endpoint"] == f"repos/{REPO}")
         assert patch_call["body"] == SETTINGS["repository"]
-        assert "unchanged" in second.stdout and second.stdout.count("unchanged") == 2 + len(names)
+        assert second.stdout.splitlines() and all(line.endswith(": unchanged") for line in second.stdout.splitlines())
 
         sent = _sent_rulesets(first_calls)
         assert ("created" in first.stdout, "updated" in second.stdout) == (True, False)
@@ -373,3 +375,189 @@ def test_check_accepts_the_defaults_github_adds_and_reports_a_differing_value(gh
     state["rulesets"][0]["enforcement"] = "disabled"
     gh_state.seed(**state)
     assert ".enforcement" in run_config("github", "check", "--repo", REPO).stdout
+
+
+def _environment_calls(calls: list[dict]) -> list[dict]:
+    return [c for c in calls if "/environments" in c["endpoint"]]
+
+
+def _writes(calls: list[dict]) -> list[tuple[str, str]]:
+    return [(c["method"], c["endpoint"].removeprefix(f"repos/{REPO}/")) for c in calls if c["method"] != "GET"]
+
+
+def _policy_names(state: dict) -> list[str]:
+    return [p["name"] for p in state["environments"][PRODUCTION]["policies"]]
+
+
+def _apply_product(gh_state) -> list[dict]:
+    gh_state.reset_calls()
+    result = run_config("github", "apply", "--repo", REPO, "--variant", "product")
+    assert (result.returncode, result.stderr) == (0, "")
+    return gh_state.calls()
+
+
+def test_product_creates_the_production_environment_and_limits_it_to_main(gh_state) -> None:
+    gh_state.seed_matching(properties=[{"property_name": "product", "value": "productforge"}])
+    assert (
+        f"environment '{PRODUCTION}': missing"
+        in run_config("github", "check", "--repo", REPO, "--variant", "product").stdout
+    )
+
+    calls = _apply_product(gh_state)
+
+    env = f"environments/{PRODUCTION}"
+    puts = [c for c in calls if c["method"] == "PUT" and c["endpoint"] == f"repos/{REPO}/{env}"]
+    assert [c["body"] for c in puts] == [{"deployment_branch_policy": PRODUCTION_POLICY}]
+    posts = [c for c in calls if c["method"] == "POST" and "deployment-branch-policies" in c["endpoint"]]
+    assert [(c["endpoint"], c["body"]) for c in posts] == [
+        (f"repos/{REPO}/{env}/deployment-branch-policies", {"name": "main", "type": "branch"})
+    ]
+    assert not any(c["method"] == "DELETE" for c in calls)
+    assert _silent(run_config("github", "check", "--repo", REPO, "--variant", "product"))
+
+
+def test_product_removes_a_star_policy_and_keeps_main(gh_state) -> None:
+    gh_state.seed_matching(
+        properties=[{"property_name": "product", "value": "productforge"}],
+        environments={
+            PRODUCTION: {
+                "deployment_branch_policy": PRODUCTION_POLICY,
+                "policies": [{"id": 1, "name": "*", "type": "branch"}, {"id": 2, "name": "main", "type": "branch"}],
+            }
+        },
+    )
+    checked = run_config("github", "check", "--repo", REPO, "--variant", "product")
+    assert (checked.returncode, f"environment '{PRODUCTION}'.branch_policies" in checked.stdout) == (1, True)
+
+    calls = _apply_product(gh_state)
+
+    assert [(m, e) for m, e in _writes(calls) if "deployment-branch-policies" in e] == [
+        ("DELETE", f"environments/{PRODUCTION}/deployment-branch-policies/1")
+    ]
+    assert _policy_names(gh_state.state()) == ["main"]
+    assert _silent(run_config("github", "check", "--repo", REPO, "--variant", "product"))
+
+
+def test_product_changes_nothing_on_a_correct_environment(gh_state) -> None:
+    gh_state.seed_matching(
+        properties=[{"property_name": "product", "value": "productforge"}],
+        environments={
+            PRODUCTION: {
+                "deployment_branch_policy": PRODUCTION_POLICY,
+                "policies": [{"id": 5, "name": "main", "type": "branch"}],
+            }
+        },
+    )
+    before = gh_state.state()["environments"]
+
+    calls = _apply_product(gh_state)
+
+    assert gh_state.state()["environments"] == before
+    assert not any(c["method"] in ("POST", "DELETE") and "/environments" in c["endpoint"] for c in calls)
+    assert _silent(run_config("github", "check", "--repo", REPO, "--variant", "product"))
+
+
+def test_an_existing_matching_environment_is_never_put_again_and_is_reported_unchanged(gh_state) -> None:
+    gh_state.seed_matching(
+        properties=[{"property_name": "product", "value": "productforge"}],
+        environments={
+            PRODUCTION: {
+                "deployment_branch_policy": PRODUCTION_POLICY,
+                "policies": [{"id": 5, "name": "main", "type": "branch"}],
+            }
+        },
+    )
+    gh_state.reset_calls()
+    result = run_config("github", "apply", "--repo", REPO, "--variant", "product")
+
+    assert f"environment '{PRODUCTION}': unchanged" in result.stdout
+    assert [c for c in _environment_calls(gh_state.calls()) if c["method"] != "GET"] == []
+
+
+def test_an_existing_environment_with_other_flags_is_put_and_its_policies_made_equal(gh_state) -> None:
+    gh_state.seed_matching(
+        properties=[{"property_name": "product", "value": "productforge"}],
+        environments={
+            PRODUCTION: {
+                "deployment_branch_policy": {"protected_branches": True, "custom_branch_policies": False},
+                "policies": [],
+            }
+        },
+    )
+
+    calls = _apply_product(gh_state)
+
+    assert [(m, e) for m, e in _writes(calls) if "/deployment" not in e and e.startswith("environments")] == [
+        ("PUT", f"environments/{PRODUCTION}")
+    ]
+    assert _policy_names(gh_state.state()) == ["main"]
+    assert _silent(run_config("github", "check", "--repo", REPO, "--variant", "product"))
+
+
+def test_a_second_product_apply_sends_no_write(gh_state) -> None:
+    gh_state.seed_matching(properties=[{"property_name": "product", "value": "productforge"}])
+    _apply_product(gh_state)
+
+    calls = _apply_product(gh_state)
+
+    assert _writes(calls) == []
+
+
+def test_environments_and_rulesets_on_a_plan_without_either_are_skipped_with_githubs_reason(gh_state) -> None:
+    gh_state.seed(
+        repo={"private": True, **_mismatched_repo_fields()},
+        workflow_permissions=_mismatched_workflow_permissions(),
+        rulesets=[],
+        properties=[{"property_name": "product", "value": "productforge"}],
+        rulesets_error=NO_RULES,
+        environments_error=NO_RULES,
+    )
+
+    applied = run_config("github", "apply", "--repo", REPO, "--variant", "product")
+    assert (applied.returncode, applied.stderr) == (0, "")
+    assert applied.stdout.splitlines()[-2:] == [
+        f"environment '{PRODUCTION}': skipped ({NO_RULES})",
+        f"ruleset: skipped ({NO_RULES})",
+    ]
+    assert gh_state.state()["repo"] == {"private": True, **SETTINGS["repository"]}
+
+    checked = run_config("github", "check", "--repo", REPO, "--variant", "product")
+    assert checked.stdout.count(f"environment '{PRODUCTION}': skipped") == 1
+    assert checked.stdout.count("ruleset: skipped") == 1
+    assert f"environment '{PRODUCTION}': missing" not in checked.stdout
+
+
+def test_an_environment_error_other_than_a_missing_one_propagates(gh_state) -> None:
+    gh_state.seed_matching(
+        properties=[{"property_name": "product", "value": "productforge"}], environments_failure="Server Error"
+    )
+
+    applied = run_config("github", "apply", "--repo", REPO, "--variant", "product")
+    checked = run_config("github", "check", "--repo", REPO, "--variant", "product")
+
+    assert applied.returncode == 1 and "Server Error" in applied.stderr
+    assert checked.returncode == 1 and "Server Error" in checked.stderr
+
+
+def test_check_reports_an_environment_that_is_not_limited_to_custom_branch_policies(gh_state) -> None:
+    gh_state.seed_matching(
+        properties=[{"property_name": "product", "value": "productforge"}],
+        environments={PRODUCTION: {"deployment_branch_policy": None, "policies": []}},
+    )
+
+    checked = run_config("github", "check", "--repo", REPO, "--variant", "product")
+
+    assert f"environment '{PRODUCTION}'.deployment_branch_policy: None" in checked.stdout
+    assert f"environment '{PRODUCTION}'.branch_policies: [] -> " in checked.stdout
+
+
+def test_other_variants_send_no_environment_call(gh_state) -> None:
+    for variant in ("standard", "publishes", "block-only"):
+        gh_state.seed_matching(properties=[{"property_name": "product", "value": "productforge"}])
+        gh_state.reset_calls()
+
+        run_config("github", "check", "--repo", REPO, "--variant", variant)
+        run_config("github", "apply", "--repo", REPO, "--variant", variant)
+
+        assert _environment_calls(gh_state.calls()) == []
+        assert "environments" not in gh_state.state()
