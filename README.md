@@ -438,9 +438,9 @@ repos/<repo>/actions/permissions/workflow` for the Actions default
 workflow permissions, `gh api -X PATCH repos/<repo>/properties/values`
 for `--product`, and the variant's rulesets, each created if no ruleset of
 that name exists yet or updated in place by name if one does, on a
-repository of any visibility. Idempotent: every call sends the file's full values, so
-running it again once a repository already matches changes nothing
-further.
+repository of any visibility. Idempotent: each part is read first and written
+only when it differs, and reported `unchanged` otherwise, so running it again
+once a repository already matches sends no write at all.
 
 **Applying needs repository admin rights** on the target — the same
 rights `gh` itself needs to change these settings — and changes a real
