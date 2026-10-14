@@ -381,20 +381,46 @@ review before it's ever applied to a real repository:
   requests; a workflow that genuinely needs to write asks for that
   permission explicitly in its own YAML instead of relying on a broad
   repository default.
-- **For public repositories only**, a ruleset requiring a pull request to
-  change `main` (no direct pushes) — skipped for a private repository,
-  because branch rules aren't available on this organisation's GitHub
-  Free plan.
+- **Rulesets**, on a public or a private repository alike: a variant
+  names which of the file's `rulesets` it applies (see Variants below).
+
+### Variants
+
+`--variant` picks the protection a repository gets; the default is
+`standard`.
+
+| Variant | What it applies |
+| --- | --- |
+| `standard` | `require-pull-request-to-change-main` (a pull request, squash merge only, no force-push, no deletion, and the status check `ci`) and `protect-release-tags` (`v*` tags can't be moved, deleted or updated) |
+| `product` | `standard`, requiring `ci / ci` — the name GitHub reports for a job that calls a reusable workflow, as a repository copied from a template has |
+| `publishes` | `standard` with the organisation owner (`OrganizationAdmin`) as an always-bypass actor on the `main` ruleset, for a repository whose release commits to `main` |
+| `block-only` | `block-main-rewrites`: only rewriting and deleting `main` is blocked; no check is required |
+
+`--required-check NAME` (repeatable) replaces the variant's default required
+check, named as GitHub reports it. It is refused with `block-only`, as is an
+unknown `--variant`, before any `gh` call.
+
+`--product NAME` sets the repository's value of the organisation's custom
+property `product` (`apply` fails, naming the property, when the
+organisation has none). Without it, `apply` leaves the value as it is and
+`check` reports only a missing one. Given it, `check` reports a missing or
+different value.
+
+A private repository on a plan that offers no rules answers the rulesets
+with a 403; `apply` and `check` then report `ruleset: skipped (<GitHub's
+reason>)` and carry on (`apply` exits `0`, and a skipped ruleset is not a
+difference for `check`).
 
 ### Checking
 
 ```sh
 uvx --from git+https://github.com/andrew-organization/productforge-config@v1.0.0 \
-  productforge-config github check --repo andrew-organization/some-repo
+  productforge-config github check --repo andrew-organization/some-repo \
+  [--variant NAME] [--product NAME] [--required-check NAME]...
 ```
 
 Prints one line for each setting whose live value differs from
-`settings/github.json` (or nothing, when the repository already matches).
+`settings/github.json`'s variant (or nothing, when the repository already matches).
 Exits `1` if anything differs, `0` if nothing does. Entirely read-only —
 `check` never calls a `gh api` write.
 
@@ -402,17 +428,19 @@ Exits `1` if anything differs, `0` if nothing does. Entirely read-only —
 
 ```sh
 uvx --from git+https://github.com/andrew-organization/productforge-config@v1.0.0 \
-  productforge-config github apply --repo andrew-organization/some-repo
+  productforge-config github apply --repo andrew-organization/some-repo \
+  [--variant NAME] [--product NAME] [--required-check NAME]...
 ```
 
-Applies `settings/github.json` to the named repository: `gh api -X PATCH
+Applies `settings/github.json`'s variant to the named repository: `gh api -X PATCH
 repos/<repo>` for the repository fields, `gh api -X PUT
 repos/<repo>/actions/permissions/workflow` for the Actions default
-workflow permissions, and — only when the repository is public — the
-branch ruleset, created if it doesn't exist yet or updated in place by
-name if it does. Idempotent: every call sends the file's full values, so
-running it again once a repository already matches changes nothing
-further.
+workflow permissions, `gh api -X PATCH repos/<repo>/properties/values`
+for `--product`, and the variant's rulesets, each created if no ruleset of
+that name exists yet or updated in place by name if one does, on a
+repository of any visibility. Idempotent: each part is read first and written
+only when it differs, and reported `unchanged` otherwise, so running it again
+once a repository already matches sends no write at all.
 
 **Applying needs repository admin rights** on the target — the same
 rights `gh` itself needs to change these settings — and changes a real
