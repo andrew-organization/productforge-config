@@ -392,7 +392,7 @@ review before it's ever applied to a real repository:
 | Variant | What it applies |
 | --- | --- |
 | `standard` | `require-pull-request-to-change-main` (a pull request, squash merge only, no force-push, no deletion, and the status check `ci`) and `protect-release-tags` (`v*` tags can't be moved, deleted or updated) |
-| `product` | `standard`, requiring `ci / ci` — the name GitHub reports for a job that calls a reusable workflow, as a repository copied from a template has |
+| `product` | `standard`, requiring `ci / ci` — the name GitHub reports for a job that calls a reusable workflow, as a repository copied from a template has — and the `production` environment, which only `main` can deploy to |
 | `publishes` | `standard` with the organisation owner (`OrganizationAdmin`) as an always-bypass actor on the `main` ruleset, for a repository whose release commits to `main` |
 | `block-only` | `block-main-rewrites`: only rewriting and deleting `main` is blocked; no check is required |
 
@@ -410,6 +410,37 @@ A private repository on a plan that offers no rules answers the rulesets
 with a 403; `apply` and `check` then report `ruleset: skipped (<GitHub's
 reason>)` and carry on (`apply` exits `0`, and a skipped ruleset is not a
 difference for `check`).
+
+### The production environment
+
+`--variant product` gives the repository a `production` environment. GitHub
+creates an environment with custom branch policies starting empty, so
+`apply` PUTs the environment with `custom_branch_policies` on, then adds the
+branch policy `main` and removes every other, a `*` added by hand included,
+so that only a run on `main` can read the environment's secrets. `check`
+reports an environment that is missing, or whose deployment-branch policy or
+branch policies differ from `settings/github.json`'s. `standard`,
+`publishes` and `block-only` create no environment. A repository connected to
+production sets its production key as a secret on this environment, and the
+job that uses it declares `environment: production`.
+
+### What the organisation holds, and what a repository holds
+
+The organisation holds, at its own level:
+
+- the secret `PF_READ_TOKEN`, with visibility `all`, so every repository,
+  including one created later, reads it;
+- the variable `PF_RUNS_ON`, once the runner exists;
+- the custom property `product`, which groups the repositories: `productforge`
+  for ProductForge's own, `workspace` for the workspace's shared projects and
+  the deployment's host repositories, a product's name (such as `the-stack`)
+  for that product's repositories, and `personal` for the owner's own. `apply`
+  never touches a `personal` repository, which keeps no rule; its value is set
+  once, by hand.
+
+A repository holds only its `production` environment's secrets, because
+no repository holds a secret named like an organisation secret: it would
+shadow the organisation's, and a rotated value would stay stale there.
 
 ### Checking
 
@@ -438,9 +469,12 @@ repos/<repo>/actions/permissions/workflow` for the Actions default
 workflow permissions, `gh api -X PATCH repos/<repo>/properties/values`
 for `--product`, and the variant's rulesets, each created if no ruleset of
 that name exists yet or updated in place by name if one does, on a
-repository of any visibility. Idempotent: each part is read first and written
-only when it differs, and reported `unchanged` otherwise, so running it again
-once a repository already matches sends no write at all.
+repository of any visibility, and the variant's environments (`gh api -X PUT
+repos/<repo>/environments/<name>` only when it is missing or its deployment-branch
+policy flags differ, then its deployment-branch policies added or deleted to
+equal the file's). Idempotent: each part is read first and written only when it
+differs, and reported `unchanged` otherwise, so running it again once a
+repository already matches sends no write at all.
 
 **Applying needs repository admin rights** on the target — the same
 rights `gh` itself needs to change these settings — and changes a real

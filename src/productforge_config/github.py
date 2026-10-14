@@ -4,14 +4,16 @@ same way settings/python.toml and settings/markdownlint.jsonc are (see
 _bundled.py).
 
 The file holds the repository fields, the Actions workflow permissions, a
-set of named `rulesets` and the `variants` that bundle them. A variant
-names the rulesets it applies, may `extends` another (inheriting its
+set of named `rulesets`, a set of named `environments` and the `variants`
+that bundle them. A variant names the rulesets it applies and the
+environments it creates, may `extends` another (inheriting its
 rulesets, bypass actors and default required checks), and may add
 `bypass_actors` (written into the ruleset that requires a pull request to
 change `main`) or `required_checks` (the status checks that ruleset
 requires by default). The variants are `standard` (the default), `product`
 (`standard` requiring `ci / ci`, the name a job calling a reusable workflow
-reports), `publishes` (`standard` plus the owner as an always-bypass actor)
+reports, plus the `production` environment, whose deployment-branch policy
+is `main` alone), `publishes` (`standard` plus the owner as an always-bypass actor)
 and `block-only` (blocks rewriting and deleting `main`, requires no check).
 
 `check(repo, ...)` is read-only: it reads the live repository through `gh
@@ -35,6 +37,12 @@ when it differs (the repository fields and Actions permissions, the
 `product` value, each ruleset's compared fields), and reported `unchanged`
 otherwise, so a second run sends no write at all. Only the repository's own
 rulesets are matched by name, never one inherited from the organisation.
+
+An environment is made equal to the file's: `apply` PUTs it, then adds the
+branch policy the file names (GitHub creates an environment with custom
+branch policies starting empty) and deletes any other, so one added by hand
+can't widen where its secrets are read; `check` reports an environment that
+is missing or whose policy or branch policies differ.
 
 An unknown variant, or a required check given with `block-only`, is refused
 (`GithubError`) before any `gh` call.
@@ -120,6 +128,10 @@ def _own_rulesets(repo: str) -> dict[str, dict[str, Any]]:
     return {s.get("name"): s for s in summaries if s.get("source_type", "Repository") == "Repository"}
 
 
+def _delete(endpoint: str) -> Any:
+    return _run_gh(["api", "-X", "DELETE", endpoint])
+
+
 def _get_ruleset(repo: str, ruleset_id: int) -> dict[str, Any]:
     return _get(f"repos/{repo}/rulesets/{ruleset_id}")
 
@@ -184,13 +196,9 @@ def _rulesets_unavailable(exc: subprocess.CalledProcessError) -> str | None:
     return reason if _NO_RULES_MARKER in reason else None
 
 
-def _resolve(settings: dict[str, Any], variant: str, required_checks: list[str]) -> dict[str, dict[str, Any]]:
-    """The rulesets `variant` applies, by name, as the full bodies to send:
-    the variant's inherited bypass actors written into the ruleset that
-    requires a pull request, and the required checks (the ones given, else
-    the variant's default, else the file's) into each ruleset requiring
-    status checks. Refuses an unknown variant, or checks given to a variant
-    that requires none, before any `gh` call.
+def _variant_chain(settings: dict[str, Any], variant: str) -> list[dict[str, Any]]:
+    """`variant` and every variant it extends, base first, so the variant's
+    own entries win. Refuses an unknown variant.
     """
     variants = settings["variants"]
     if variant not in variants:
@@ -201,7 +209,27 @@ def _resolve(settings: dict[str, Any], variant: str, required_checks: list[str])
     while name is not None:
         chain.append(variants[name])
         name = variants[name].get("extends")
-    chain.reverse()  # base first, so the variant's own entries win
+    chain.reverse()
+    return chain
+
+
+def _resolve_environments(settings: dict[str, Any], variant: str) -> dict[str, dict[str, Any]]:
+    """The environments `variant` creates, by name, as the file states them."""
+    names: list[str] = []
+    for layer in _variant_chain(settings, variant):
+        names = layer.get("environments", names)
+    return {name: copy.deepcopy(settings["environments"][name]) for name in names}
+
+
+def _resolve(settings: dict[str, Any], variant: str, required_checks: list[str]) -> dict[str, dict[str, Any]]:
+    """The rulesets `variant` applies, by name, as the full bodies to send:
+    the variant's inherited bypass actors written into the ruleset that
+    requires a pull request, and the required checks (the ones given, else
+    the variant's default, else the file's) into each ruleset requiring
+    status checks. Refuses an unknown variant, or checks given to a variant
+    that requires none, before any `gh` call.
+    """
+    chain = _variant_chain(settings, variant)
 
     ruleset_names: list[str] = []
     bypass_actors: list[dict[str, Any]] = []
@@ -241,6 +269,56 @@ def _normalised_bypass_actors(actors: Any) -> Any:
         {k: v for k, v in actor.items() if k != "actor_id"} if actor.get("actor_type") == "OrganizationAdmin" else actor
         for actor in actors
     ]
+
+
+def _environment_url(repo: str, name: str) -> str:
+    return f"repos/{repo}/environments/{name}"
+
+
+def _live_environment(repo: str, name: str) -> tuple[dict[str, Any], list[dict[str, str]]] | None:
+    """The live environment's deployment-branch policy and its branch
+    policies (name and type, sorted by name), or None when it doesn't exist.
+    """
+    try:
+        live = _get(_environment_url(repo, name))
+    except subprocess.CalledProcessError as exc:
+        if "HTTP 404" in (exc.stderr or ""):
+            return None
+        raise
+    policy = live.get("deployment_branch_policy")
+    policies: list[dict[str, str]] = []
+    if isinstance(policy, dict) and policy.get("custom_branch_policies"):
+        listed = _get(f"{_environment_url(repo, name)}/deployment-branch-policies") or {}
+        policies = [{"name": p["name"], "type": p["type"]} for p in listed.get("branch_policies", [])]
+    return policy, sorted(policies, key=lambda p: p["name"])
+
+
+def _apply_environment(repo: str, name: str, environment: dict[str, Any]) -> list[str]:
+    """Create the environment `name` if it is missing and make its branch
+    policies equal the file's: GitHub creates one with custom branch policies
+    starting empty, so the missing policies are added and every other one
+    is removed. Returns one line per action taken.
+    """
+    url = _environment_url(repo, name)
+    existed = _live_environment(repo, name) is not None
+    _put(url, {"deployment_branch_policy": environment["deployment_branch_policy"]})
+    actions = [f"environment {name!r}: {'updated' if existed else 'created'}"]
+
+    live = _get(f"{url}/deployment-branch-policies") or {}
+    wanted = {(p["name"], p["type"]) for p in environment["branch_policies"]}
+    present = set()
+    for policy in live.get("branch_policies", []):
+        key = (policy["name"], policy["type"])
+        if key in wanted and key not in present:
+            present.add(key)
+            continue
+        _delete(f"{url}/deployment-branch-policies/{policy['id']}")
+        actions.append(f"environment {name!r}: removed branch policy {policy['name']!r}")
+    for policy in environment["branch_policies"]:
+        if (policy["name"], policy["type"]) not in present:
+            _post(f"{url}/deployment-branch-policies", policy)
+            actions.append(f"environment {name!r}: added branch policy {policy['name']!r}")
+    return actions
 
 
 def _live_product(repo: str) -> str | None:
@@ -284,6 +362,21 @@ def check_report(
     elif live_product != product:
         live_text = "missing" if live_product is None else repr(live_product)
         diffs.append(f"{PRODUCT_PROPERTY}: {live_text} -> {product!r}")
+
+    for name, environment in _resolve_environments(settings, variant).items():
+        live_environment = _live_environment(repo, name)
+        if live_environment is None:
+            diffs.append(f"environment {name!r}: missing")
+            continue
+        live_policy, live_policies = live_environment
+        if not _holds(live_policy, environment["deployment_branch_policy"]):
+            diffs.append(
+                f"environment {name!r}.deployment_branch_policy: {live_policy!r}"
+                f" -> {environment['deployment_branch_policy']!r}"
+            )
+        wanted_policies = sorted(environment["branch_policies"], key=lambda p: p["name"])
+        if live_policies != wanted_policies:
+            diffs.append(f"environment {name!r}.branch_policies: {live_policies!r} -> {wanted_policies!r}")
 
     try:
         by_name = _own_rulesets(repo)
@@ -332,6 +425,7 @@ def apply(
     """
     settings = _bundled_github_settings()
     rulesets = _resolve(settings, variant, required_checks or [])
+    environments = _resolve_environments(settings, variant)
     actions = []
 
     live_repo = _get(f"repos/{repo}")
@@ -360,6 +454,9 @@ def apply(
                     f"couldn't set the organisation property {PRODUCT_PROPERTY!r} on {repo}: {_gh_reason(exc)}"
                 ) from exc
             actions.append(f"{PRODUCT_PROPERTY}: set to {product!r}")
+
+    for name, environment in environments.items():
+        actions.extend(_apply_environment(repo, name, environment))
 
     try:
         by_name = _own_rulesets(repo)
