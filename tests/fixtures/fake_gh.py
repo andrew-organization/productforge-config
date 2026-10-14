@@ -15,8 +15,9 @@ Environments are held in `environments`, by name, each with its
 environment that doesn't exist answers 404, and one created by a PUT starts
 with no policies, as GitHub's does.
 
-State may also set `rulesets_error` (a message every rulesets call then fails
-with, as `gh` prints a 403) and `no_product_property` (the organisation has
+State may also set `rulesets_error` or `environments_error` (a message every
+rulesets, or environment, call then fails with, as `gh` prints a 403),
+`environments_failure` (the same, as a 500) and `no_product_property` (the organisation has
 no property `product`, so setting it fails).
 
 A rulesets list GET honours `includes_parents=false` (an inherited ruleset
@@ -49,7 +50,13 @@ def _log_call(path: str | None, method: str, endpoint: str, body) -> None:
         f.write(json.dumps({"method": method, "endpoint": endpoint, "body": body}) + "\n")
 
 
-def _environments(state: dict, state_path: str, method: str, tail: list[str], body) -> int:
+def _environments(state: dict, state_path: str, method: str, tail: list[str], body, slurp: bool) -> int:
+    if state.get("environments_error"):
+        print(f"gh: {state['environments_error']} (HTTP 403)", file=sys.stderr)
+        return 1
+    if state.get("environments_failure"):
+        print(f"gh: {state['environments_failure']} (HTTP 500)", file=sys.stderr)
+        return 1
     environments = state.setdefault("environments", {})
     environment = environments.get(tail[0])
     if method == "PUT" and len(tail) == 1:
@@ -67,7 +74,8 @@ def _environments(state: dict, state_path: str, method: str, tail: list[str], bo
         print(json.dumps({"name": tail[0], "deployment_branch_policy": environment["deployment_branch_policy"]}))
     elif tail[1:2] == ["deployment-branch-policies"]:
         if len(tail) == 2 and method == "GET":
-            print(json.dumps({"total_count": len(policies), "branch_policies": policies}))
+            page = {"total_count": len(policies), "branch_policies": policies}
+            print(json.dumps([page] if slurp else page))
         elif len(tail) == 2 and method == "POST":
             created = {"id": max((p["id"] for p in policies), default=0) + 1, **(body or {})}
             policies.append(created)
@@ -157,7 +165,7 @@ def main() -> int:
         return 0
 
     if tail[0] == "environments":
-        return _environments(state, state_path, method, tail[1:], body)
+        return _environments(state, state_path, method, tail[1:], body, slurp)
 
     if tail[0] == "rulesets":
         if state.get("rulesets_error"):

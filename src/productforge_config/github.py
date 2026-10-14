@@ -32,17 +32,22 @@ custom property `product`, and the variant's rulesets, each created if no
 ruleset of that name exists and updated in place by name if one does, on a
 repository of any visibility. Where GitHub answers that the plan offers no
 rules for the repository, the rules are reported as skipped with GitHub's
-reason and the rest still applies. Each part is read first and written only
+reason and the rest is still attempted. Each part is read first and written only
 when it differs (the repository fields and Actions permissions, the
 `product` value, each ruleset's compared fields), and reported `unchanged`
 otherwise, so a second run sends no write at all. Only the repository's own
 rulesets are matched by name, never one inherited from the organisation.
 
-An environment is made equal to the file's: `apply` PUTs it, then adds the
+An environment is made equal to the file's: `apply` PUTs it only when it is
+missing or its deployment-branch policy flags differ (a full-replace PUT of
+an existing one would clear its reviewers and wait timers), then adds the
 branch policy the file names (GitHub creates an environment with custom
 branch policies starting empty) and deletes any other, so one added by hand
 can't widen where its secrets are read; `check` reports an environment that
-is missing or whose policy or branch policies differ.
+is missing or whose policy or branch policies differ. A private repository
+on a plan without environments answers the environment calls with a 403, as
+it does the rulesets: the environment is then reported as skipped with
+GitHub's reason, like the rulesets, and `apply` still exits 0.
 
 An unknown variant, or a required check given with `block-only`, is refused
 (`GithubError`) before any `gh` call.
@@ -191,7 +196,9 @@ def _gh_reason(exc: subprocess.CalledProcessError) -> str:
 
 
 def _rulesets_unavailable(exc: subprocess.CalledProcessError) -> str | None:
-    """Return GitHub's reason when `exc` is the answer for a plan without rules, else None."""
+    """Return GitHub's reason when `exc` is the answer for a plan without the
+    feature (rulesets, or environments on a private repository), else None.
+    """
     reason = _gh_reason(exc)
     return reason if _NO_RULES_MARKER in reason else None
 
@@ -275,9 +282,17 @@ def _environment_url(repo: str, name: str) -> str:
     return f"repos/{repo}/environments/{name}"
 
 
-def _live_environment(repo: str, name: str) -> tuple[dict[str, Any], list[dict[str, str]]] | None:
+def _branch_policies(url: str) -> list[dict[str, Any]]:
+    """Every deployment-branch policy of the environment at `url`, across all pages."""
+    return [
+        policy for page in _get_all(f"{url}/deployment-branch-policies") for policy in page.get("branch_policies", [])
+    ]
+
+
+def _live_environment(repo: str, name: str) -> tuple[dict[str, Any] | None, list[dict[str, Any]]] | None:
     """The live environment's deployment-branch policy and its branch
-    policies (name and type, sorted by name), or None when it doesn't exist.
+    policies (id, name and type, sorted by name), or None when it doesn't
+    exist.
     """
     try:
         live = _get(_environment_url(repo, name))
@@ -286,28 +301,37 @@ def _live_environment(repo: str, name: str) -> tuple[dict[str, Any], list[dict[s
             return None
         raise
     policy = live.get("deployment_branch_policy")
-    policies: list[dict[str, str]] = []
+    policies: list[dict[str, Any]] = []
     if isinstance(policy, dict) and policy.get("custom_branch_policies"):
-        listed = _get(f"{_environment_url(repo, name)}/deployment-branch-policies") or {}
-        policies = [{"name": p["name"], "type": p["type"]} for p in listed.get("branch_policies", [])]
+        policies = [
+            {"id": p["id"], "name": p["name"], "type": p["type"]}
+            for p in _branch_policies(_environment_url(repo, name))
+        ]
     return policy, sorted(policies, key=lambda p: p["name"])
 
 
 def _apply_environment(repo: str, name: str, environment: dict[str, Any]) -> list[str]:
-    """Create the environment `name` if it is missing and make its branch
-    policies equal the file's: GitHub creates one with custom branch policies
-    starting empty, so the missing policies are added and every other one
-    is removed. Returns one line per action taken.
+    """Make the environment `name` equal the file's. It is PUT only when it
+    is missing or its deployment-branch policy flags differ, never when it
+    already matches (a full-replace PUT would clear its reviewers and wait
+    timers). GitHub creates one with custom branch policies starting empty,
+    so the missing branch policies are added and every other one is removed,
+    and nothing is sent when they already match. Returns one line per action.
     """
     url = _environment_url(repo, name)
-    existed = _live_environment(repo, name) is not None
-    _put(url, {"deployment_branch_policy": environment["deployment_branch_policy"]})
-    actions = [f"environment {name!r}: {'updated' if existed else 'created'}"]
+    wanted_policy = environment["deployment_branch_policy"]
+    live = _live_environment(repo, name)
+    if live is not None and _holds(live[0], wanted_policy):
+        actions = [f"environment {name!r}: unchanged"]
+        current = live[1]
+    else:
+        _put(url, {"deployment_branch_policy": wanted_policy})
+        actions = [f"environment {name!r}: {'created' if live is None else 'updated'}"]
+        current = [] if live is None else _branch_policies(url)
 
-    live = _get(f"{url}/deployment-branch-policies") or {}
     wanted = {(p["name"], p["type"]) for p in environment["branch_policies"]}
     present = set()
-    for policy in live.get("branch_policies", []):
+    for policy in current:
         key = (policy["name"], policy["type"])
         if key in wanted and key not in present:
             present.add(key)
@@ -364,11 +388,19 @@ def check_report(
         diffs.append(f"{PRODUCT_PROPERTY}: {live_text} -> {product!r}")
 
     for name, environment in _resolve_environments(settings, variant).items():
-        live_environment = _live_environment(repo, name)
+        try:
+            live_environment = _live_environment(repo, name)
+        except subprocess.CalledProcessError as exc:
+            reason = _rulesets_unavailable(exc)
+            if reason is None:
+                raise
+            notes.append(f"environment {name!r}: skipped ({reason})")
+            continue
         if live_environment is None:
             diffs.append(f"environment {name!r}: missing")
             continue
         live_policy, live_policies = live_environment
+        live_policies = [{"name": p["name"], "type": p["type"]} for p in live_policies]
         if not _holds(live_policy, environment["deployment_branch_policy"]):
             diffs.append(
                 f"environment {name!r}.deployment_branch_policy: {live_policy!r}"
@@ -456,7 +488,13 @@ def apply(
             actions.append(f"{PRODUCT_PROPERTY}: set to {product!r}")
 
     for name, environment in environments.items():
-        actions.extend(_apply_environment(repo, name, environment))
+        try:
+            actions.extend(_apply_environment(repo, name, environment))
+        except subprocess.CalledProcessError as exc:
+            reason = _rulesets_unavailable(exc)
+            if reason is None:
+                raise
+            actions.append(f"environment {name!r}: skipped ({reason})")
 
     try:
         by_name = _own_rulesets(repo)

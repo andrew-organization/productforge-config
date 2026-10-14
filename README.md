@@ -409,13 +409,18 @@ different value.
 A private repository on a plan that offers no rules answers the rulesets
 with a 403; `apply` and `check` then report `ruleset: skipped (<GitHub's
 reason>)` and carry on (`apply` exits `0`, and a skipped ruleset is not a
-difference for `check`).
+difference for `check`). The `production` environment's calls are answered the
+same way on such a plan and are reported the same way,
+`environment 'production': skipped (<GitHub's reason>)`, noted once by `check`.
 
 ### The production environment
 
 `--variant product` gives the repository a `production` environment. GitHub
 creates an environment with custom branch policies starting empty, so
-`apply` PUTs the environment with `custom_branch_policies` on, then adds the
+`apply` PUTs the environment with `custom_branch_policies` on, only when it is
+missing or those flags differ (an existing matching environment is reported
+`unchanged` and never PUT again, since a full-replace PUT would clear its
+reviewers and wait timers), then adds the
 branch policy `main` and removes every other, a `*` added by hand included,
 so that only a run on `main` can read the environment's secrets. `check`
 reports an environment that is missing, or whose deployment-branch policy or
@@ -435,8 +440,8 @@ The organisation holds, at its own level:
   for ProductForge's own, `workspace` for the workspace's shared projects and
   the deployment's host repositories, a product's name (such as `the-stack`)
   for that product's repositories, and `personal` for the owner's own. `apply`
-  never touches a `personal` repository, which keeps no rule; its value is set
-  once, by hand.
+  has no guard against a `personal` repository, which keeps no rule: the
+  callers never apply one, and its value is set once, by hand.
 
 A repository holds only its `production` environment's secrets, because
 no repository holds a secret named like an organisation secret: it would
