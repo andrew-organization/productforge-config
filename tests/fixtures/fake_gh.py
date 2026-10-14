@@ -20,6 +20,8 @@ rulesets, or environment, call then fails with, as `gh` prints a 403),
 `environments_failure` (the same, as a 500) and `no_product_property` (the organisation has
 no property `product`, so setting it fails).
 
+`billing_summary` is what `organizations/<org>/settings/billing/usage/summary` answers.
+
 A rulesets list GET honours `includes_parents=false` (an inherited ruleset
 carries `source_type: "Organization"`) and `--paginate --slurp`.
 
@@ -125,6 +127,9 @@ def main() -> int:
     state = _load_state(state_path)
 
     parts = endpoint.split("/")
+    if parts[0] == "organizations" and parts[2:] == ["settings", "billing", "usage", "summary"]:
+        print(json.dumps(state["billing_summary"]))
+        return 0
     # parts: "repos", "<owner>", "<name>", ...tail
     tail = parts[3:]
 
