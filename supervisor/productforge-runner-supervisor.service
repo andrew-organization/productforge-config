@@ -11,8 +11,16 @@ ExecStart=/usr/bin/python3 /opt/productforge-runner/runner_supervisor.py run \
   --token-file /etc/productforge-runner/token
 Restart=always
 RestartSec=10
-# Stopping removes the running container and its registration within this time.
-TimeoutStopSec=60
+# The supervisor itself gains no privilege, sees a private /tmp and writes only the Docker client's own
+# configuration directory (when it exists). Its containers are started by the Docker daemon and are not
+# bound by these settings; the supervisor confines them with the options on its `docker run`.
+NoNewPrivileges=true
+ProtectSystem=strict
+PrivateTmp=true
+ReadWritePaths=-/home/pf-runner/.docker
+# Stopping removes the running container and then its registration, retrying a registration GitHub still
+# holds as busy for under a minute; one still held after that is removed by the next start.
+TimeoutStopSec=120
 
 [Install]
 WantedBy=multi-user.target
