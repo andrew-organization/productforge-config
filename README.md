@@ -308,9 +308,16 @@ variable returns every repository to hosted runners at once, with no change to
 any caller. This repository's own `ci.yml` keeps `ubuntu-latest` because the
 repository is public, and a public repository's hosted minutes are free.
 
-When the runner is down, jobs wait for it rather than fail. Delete `PF_RUNS_ON`
-(or set it to `"ubuntu-latest"`) and re-run the waiting runs; they then run
-hosted. Set it back once the runner is up.
+When the runner is down, jobs wait for it rather than fail. A queued job has
+already resolved its labels, so changing the variable does not move it: unset
+`PF_RUNS_ON` (or set it to `"ubuntu-latest"`), cancel the waiting runs, then
+re-run them, and the new runs resolve to hosted. Set the variable back once the
+runner is up.
+
+A public repository that calls these workflows with the switch set to the
+self-hosted runner queues forever: the runner group excludes public
+repositories, so no runner ever takes the job. Public repositories stay on
+`ubuntu-latest`, whose minutes are free.
 
 An invalid value fails the run at its start as a workflow file issue, with no job
 and no minutes used, and GitHub's message doesn't name the variable. When a run
