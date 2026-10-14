@@ -26,8 +26,8 @@ version is validated against VERSION_RE first, so an invalid one is
 refused rather than half-applied.
 
 `productforge-config github check --repo <owner/name>` and `... github
-apply --repo <owner/name>`, each taking `--variant`, `--product` and
-`--required-check`: check or apply settings/github.json's protection
+apply --repo <owner/name>`, each taking `--variant`, `--product`,
+`--required-check` and `--bypass-deploy-keys`: check or apply settings/github.json's protection
 variant (see github.py) against a live repository, public or private, via
 `gh api`. `check` never writes anything; `apply` needs repository admin
 rights on the target.
@@ -743,16 +743,24 @@ def _add_variant_arguments(parser: argparse.ArgumentParser) -> None:
         help="The status check main requires; repeatable. Default: `ci / ci` for product, `ci` for standard and "
         "publishes. Refused with block-only, which requires no check.",
     )
+    parser.add_argument(
+        "--bypass-deploy-keys",
+        action="store_true",
+        help="Add the repository's deploy keys as an always-bypass actor on the main ruleset, for a repository "
+        "whose release pushes with a deploy key. Only the publishes variant takes it.",
+    )
 
 
 def _main_github(args: argparse.Namespace) -> int:
     try:
         if args.github_command == "check":
-            diffs, notes = github.check_report(args.repo, args.variant, args.product, args.required_checks)
+            diffs, notes = github.check_report(
+                args.repo, args.variant, args.product, args.required_checks, args.bypass_deploy_keys
+            )
             for line in diffs + notes:
                 print(line)
             return 1 if diffs else 0
-        applied = github.apply(args.repo, args.variant, args.product, args.required_checks)
+        applied = github.apply(args.repo, args.variant, args.product, args.required_checks, args.bypass_deploy_keys)
         for line in applied:
             print(line)
         return 0

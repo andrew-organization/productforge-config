@@ -393,8 +393,16 @@ review before it's ever applied to a real repository:
 | --- | --- |
 | `standard` | `require-pull-request-to-change-main` (a pull request, squash merge only, no force-push, no deletion, and the status check `ci`) and `protect-release-tags` (`v*` tags can't be moved, deleted or updated) |
 | `product` | `standard`, requiring `ci / ci` — the name GitHub reports for a job that calls a reusable workflow, as a repository copied from a template has — and the `production` environment, which only `main` can deploy to |
-| `publishes` | `standard` with the organisation owner (`OrganizationAdmin`) as an always-bypass actor on the `main` ruleset, for a repository whose release commits to `main` |
+| `publishes` | `standard` with the organisation owner (`OrganizationAdmin`) as an always-bypass actor on the `main` ruleset, for a repository whose release commits to `main`; with `--bypass-deploy-keys`, its deploy keys too |
 | `block-only` | `block-main-rewrites`: only rewriting and deleting `main` is blocked; no check is required |
+
+`--bypass-deploy-keys` adds the repository's deploy keys as a second always-bypass
+actor (`DeployKey`) on the `main` ruleset, next to the owner. Only `publishes`
+takes it; any other variant refuses it before any `gh` call. It is for a
+repository whose release pushes its version commit with a deploy key (see
+"A release that pushes with a deploy key" below). GitHub reads the actor back
+with `actor_id: null`, so `check` compares it, like the owner, on its type and
+mode, in whatever order GitHub lists the actors.
 
 `--required-check NAME` (repeatable) replaces the variant's default required
 check, named as GitHub reports it. It is refused with `block-only`, as is an
@@ -428,6 +436,39 @@ branch policies differ from `settings/github.json`'s. `standard`,
 `publishes` and `block-only` create no environment. A repository connected to
 production sets its production key as a secret on this environment, and the
 job that uses it declares `environment: production`.
+
+### A release that pushes with a deploy key
+
+GitHub refuses `github-actions[bot]`, the identity a release job pushes with,
+as a ruleset bypass actor, so on a `main` that requires a pull request a
+release can't push its own version commit with the job's token. The shared
+`release.yml` instead takes an optional input `environment` and an optional
+secret `PF_RELEASE_DEPLOY_KEY`. A caller with both:
+
+```yaml
+jobs:
+  release:
+    uses: andrew-organization/productforge-config/.github/workflows/release.yml@vX.Y.Z
+    permissions: {contents: write, issues: write, pull-requests: write}
+    with:
+      environment: release
+    secrets:
+      PF_RELEASE_DEPLOY_KEY: ${{ secrets.PF_RELEASE_DEPLOY_KEY }}
+```
+
+has its job declare that environment and its checkout use the key, so every
+push of the release goes over SSH. The caller passes the secret itself: the
+called workflow doesn't read it otherwise. A caller with neither releases
+exactly as before, with the job's token.
+
+The repository holds a write deploy key, the key's private half as the secret
+`PF_RELEASE_DEPLOY_KEY` of an environment whose only deployment branch is
+`main` (so only a run on `main` reads it), and `productforge-config github
+apply --variant publishes --bypass-deploy-keys` names the deploy keys as a
+bypass actor. A push with the key then lands on `main` while the job's token is
+still refused. A push with a deploy key, unlike one with the job's token,
+starts workflows, so the version commit keeps its `chore(release):` type and
+`[skip ci]`.
 
 ### What the organisation holds, and what a repository holds
 

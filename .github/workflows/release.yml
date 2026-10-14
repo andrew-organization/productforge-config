@@ -15,6 +15,20 @@ name: Release
 # nothing. A release is a git tag and its GitHub release; a repository that
 # also carries its version in a file writes and commits it through
 # prepare-cmd, before the tag is made.
+#
+# A repository whose main requires a pull request can't let this job's own
+# token push that version commit: GitHub refuses github-actions[bot] as a
+# bypass actor. It may instead pass a write deploy key of its own, which its
+# ruleset names as a bypass actor (productforge-config github apply
+# --variant publishes --bypass-deploy-keys), held as a secret of an
+# environment only main can use:
+#
+#       with: {environment: release}
+#       secrets: {PF_RELEASE_DEPLOY_KEY: "${{ secrets.PF_RELEASE_DEPLOY_KEY }}"}
+#
+# The job then declares that environment and checks out over SSH with the
+# key, so every push of the release, the version commit and the tag, goes
+# over SSH. A caller passing neither releases with its token, as before.
 on:
   push:
     branches:
@@ -35,6 +49,19 @@ on:
           Empty by default.
         type: string
         default: ""
+      environment:
+        description: >-
+          The environment the job runs in, for a repository whose deploy key
+          is a secret of that environment. Empty by default: no environment.
+        type: string
+        default: ""
+    secrets:
+      PF_RELEASE_DEPLOY_KEY:
+        description: >-
+          A write deploy key of the calling repository, as its private half.
+          When present the checkout uses it, so the release pushes over SSH.
+          Absent by default: the job pushes with its token.
+        required: false
 
 jobs:
   release:
@@ -53,6 +80,10 @@ jobs:
     # at all; this condition is the third guard.
     if: ${{ !startsWith(github.event.head_commit.message, 'chore(release):') }}
 
+    # Declared only when the caller gives one: an empty value is no
+    # environment, so a repository without one is unaffected.
+    environment: ${{ inputs.environment || null }}
+
     permissions:
       contents: write
       issues: write
@@ -62,6 +93,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          # Empty unless the caller passes a deploy key; then the checkout's
+          # remote is SSH and the prepare step's push goes with that key.
+          ssh-key: ${{ secrets.PF_RELEASE_DEPLOY_KEY }}
 
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444  # v5.0.0
         with:

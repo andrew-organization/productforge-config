@@ -24,6 +24,7 @@ BLOCK = "block-main-rewrites"
 RULESETS = {"standard": [MAIN, TAGS], "product": [MAIN, TAGS], "publishes": [MAIN, TAGS], "block-only": [BLOCK]}
 DEFAULT_CHECK = {"standard": "ci", "product": "ci / ci", "publishes": "ci"}
 OWNER_BYPASS = {"actor_id": 1, "actor_type": "OrganizationAdmin", "bypass_mode": "always"}
+DEPLOY_KEY_BYPASS = {"actor_type": "DeployKey", "bypass_mode": "always"}
 PRODUCTION = "production"
 PRODUCTION_POLICY = {"protected_branches": False, "custom_branch_policies": True}
 NO_RULES = "Upgrade to GitHub Pro or make this repository public to enable this feature."
@@ -359,6 +360,52 @@ def test_check_reports_nothing_for_an_owner_bypass_read_back_with_a_null_actor_i
     state["rulesets"][0]["bypass_actors"][0]["bypass_mode"] = "pull_request"
     gh_state.seed(**state)
     assert "bypass_actors" in run_config("github", "check", "--repo", REPO, "--variant", "publishes").stdout
+
+
+def test_bypass_deploy_keys_adds_the_deploy_key_actor_to_the_main_ruleset_only(gh_state) -> None:
+    gh_state.seed_matching(properties=[{"property_name": "product", "value": "productforge"}])
+    args = ("--repo", REPO, "--variant", "publishes", "--bypass-deploy-keys")
+
+    gh_state.reset_calls()
+    assert run_config("github", "apply", *args).returncode == 0
+    sent = _sent_rulesets(gh_state.calls())
+    assert sent[MAIN]["bypass_actors"] == [OWNER_BYPASS, DEPLOY_KEY_BYPASS]
+    assert sent[TAGS]["bypass_actors"] == []
+
+    assert _silent(run_config("github", "check", *args))
+    gh_state.reset_calls()
+    run_config("github", "apply", *args)
+    assert [c for c in gh_state.calls() if c["method"] != "GET"] == []
+
+    without = run_config("github", "check", "--repo", REPO, "--variant", "publishes")
+    assert without.returncode == 1 and "bypass_actors" in without.stdout
+
+
+def test_check_reports_nothing_for_deploy_keys_read_back_with_a_null_actor_id_in_any_order(gh_state) -> None:
+    gh_state.seed_matching(properties=[{"property_name": "product", "value": "productforge"}])
+    args = ("--repo", REPO, "--variant", "publishes", "--bypass-deploy-keys")
+    run_config("github", "apply", *args)
+    state = gh_state.state()
+    for ruleset in state["rulesets"]:
+        for actor in ruleset["bypass_actors"]:
+            actor["actor_id"] = None
+        ruleset["bypass_actors"].reverse()
+    gh_state.seed(**state)
+
+    assert run_config("github", "check", *args).stdout == ""
+
+    state["rulesets"][0]["bypass_actors"] = [OWNER_BYPASS]
+    gh_state.seed(**state)
+    assert "bypass_actors" in run_config("github", "check", *args).stdout
+
+
+def test_bypass_deploy_keys_is_refused_before_any_call_on_a_variant_without_one(gh_state) -> None:
+    gh_state.seed_matching()
+    gh_state.reset_calls()
+    for variant in ("standard", "product", "block-only"):
+        result = run_config("github", "apply", "--repo", REPO, "--variant", variant, "--bypass-deploy-keys")
+        assert result.returncode == 2 and "--bypass-deploy-keys" in result.stderr
+    assert gh_state.calls() == []
 
 
 def test_check_accepts_the_defaults_github_adds_and_reports_a_differing_value(gh_state) -> None:
