@@ -32,6 +32,10 @@ variant (see github.py) against a live repository, public or private, via
 `gh api`. `check` never writes anything; `apply` needs repository admin
 rights on the target.
 
+`productforge-config usage --org ORG [--allowance MINUTES] [--from-day DAY]`
+prints one line of the month's Actions minutes against the allowance and
+exits 1 when the month is projected to reach it (see usage.py).
+
 Stdlib-only by design: this runs via `uvx --from git+...`, in whatever
 repository the person runs it in, and reads the shared settings bundled
 into this package at build time (see pyproject.toml's force-include)
@@ -41,6 +45,7 @@ caller's own GitHub authentication rather than reimplementing it.
 """
 
 import argparse
+import datetime
 import json
 import re
 import subprocess
@@ -50,7 +55,7 @@ from typing import Any
 
 import tomllib
 
-from productforge_config import _files, github, kits, ports, scaffold
+from productforge_config import _files, github, kits, ports, scaffold, usage
 from productforge_config._bundled import bundled_settings_dir as _bundled_settings_dir
 
 HOOK_SOURCE = kits.HOOK_SOURCE
@@ -659,7 +664,44 @@ def _build_parser() -> argparse.ArgumentParser:
     apply_parser.add_argument("--repo", required=True, help="The repository to apply settings to, as owner/name.")
     _add_variant_arguments(apply_parser)
 
+    usage_parser = subparsers.add_parser(
+        "usage",
+        help="Print the month's Actions minutes against the allowance; exit 1 when the month is projected to "
+        "reach it.",
+    )
+    usage_parser.add_argument("--org", required=True, help="The organisation whose billing summary is read.")
+    usage_parser.add_argument(
+        "--allowance",
+        type=int,
+        default=usage.DEFAULT_ALLOWANCE,
+        help=f"The month's allowance in minutes (default: {usage.DEFAULT_ALLOWANCE}).",
+    )
+    usage_parser.add_argument(
+        "--from-day",
+        type=int,
+        default=usage.DEFAULT_FROM_DAY,
+        help=f"The day of the month the projection starts to warn on (default: {usage.DEFAULT_FROM_DAY}).",
+    )
+    usage_parser.add_argument("--now", type=_utc_instant, help=argparse.SUPPRESS)
+
     return parser
+
+
+def _utc_instant(text: str) -> datetime.datetime:
+    instant = datetime.datetime.fromisoformat(text)
+    return instant if instant.tzinfo else instant.replace(tzinfo=datetime.UTC)
+
+
+def _main_usage(args: argparse.Namespace) -> int:
+    now = args.now or datetime.datetime.now(datetime.UTC)
+    try:
+        line, status = usage.usage(args.org, args.allowance, args.from_day, now)
+    except subprocess.CalledProcessError as exc:
+        stderr = (exc.stderr or str(exc)).strip()
+        print(f"productforge-config: gh api failed: {stderr}", file=sys.stderr)
+        return 2
+    print(line)
+    return status
 
 
 def _main_update(args: argparse.Namespace) -> int:
@@ -782,6 +824,8 @@ def main(argv: list[str] | None = None) -> int:
         return _main_init(args)
     if args.command == "ports":
         return _main_ports(args)
+    if args.command == "usage":
+        return _main_usage(args)
     return _main_github(args)
 
 

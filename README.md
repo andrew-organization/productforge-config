@@ -532,6 +532,28 @@ Both commands need `gh` installed and authenticated (`gh auth status`)
 with access to the target repository; neither talks to the GitHub API
 directly.
 
+## Checking the month's Actions usage
+
+`productforge-config usage --org ORG [--allowance MINUTES] [--from-day DAY]`
+reads `organizations/ORG/settings/billing/usage/summary` through `gh api` (the
+caller's own `gh` login, which needs the organisation's billing read access),
+adds up the current month's Actions items measured in minutes (the month is
+named explicitly in the request, in UTC), projects the month evenly from the
+time elapsed since it began (fractional days, so part-way through a day is not
+counted as a whole one) and prints one line:
+
+```text
+Actions: 2161 of 3000 minutes used, day 14 of 31, projected 4785
+```
+
+It exits 1 when the projected total reaches the allowance (`--allowance`,
+default 3000) and the day of the month is at or after `--from-day` (default
+3, since the first days of a month project too wildly to trust); otherwise 0.
+A month with no Actions minutes yet prints `no usage yet` and exits 0. A
+failing `gh` call exits 2. GitHub's budget stops Actions at the allowance and
+warns nobody before it, so this is the early signal; run it daily to be told
+in time.
+
 ## Developing this repository
 
 `make install`, `make lint`, `make test` — the same three targets every

@@ -20,6 +20,10 @@ rulesets, or environment, call then fails with, as `gh` prints a 403),
 `environments_failure` (the same, as a 500) and `no_product_property` (the organisation has
 no property `product`, so setting it fails).
 
+`billing_summary` is what `organizations/<org>/settings/billing/usage/summary` answers for the month
+named by its `timePeriod`; a request naming another `year`/`month` gets that month with no usage items,
+and a request naming neither gets `billing_summary`'s own month (the real default, the current month).
+
 A rulesets list GET honours `includes_parents=false` (an inherited ruleset
 carries `source_type: "Organization"`) and `--paginate --slurp`.
 
@@ -31,6 +35,7 @@ Understands exactly the shapes github.py's `_run_gh` produces: `api
 import json
 import os
 import sys
+import urllib.parse
 
 
 def _load_state(path: str) -> dict:
@@ -125,6 +130,13 @@ def main() -> int:
     state = _load_state(state_path)
 
     parts = endpoint.split("/")
+    if parts[0] == "organizations" and parts[2:] == ["settings", "billing", "usage", "summary"]:
+        summary = state["billing_summary"]
+        period = {k: int(v[0]) for k, v in urllib.parse.parse_qs(query).items() if k in ("year", "month")}
+        if period and any(summary["timePeriod"].get(k) != v for k, v in period.items()):
+            summary = {**summary, "timePeriod": {**summary["timePeriod"], **period}, "usageItems": []}
+        print(json.dumps(summary))
+        return 0
     # parts: "repos", "<owner>", "<name>", ...tail
     tail = parts[3:]
 
