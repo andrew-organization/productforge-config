@@ -287,6 +287,42 @@ this repository out at the commit it runs from (`job.workflow_repository` at
 `actions/setup` from there. `parallel:` steps run inside a reusable workflow as
 they do in a caller's own job.
 
+### The runner switch
+
+The jobs of `ci-api.yml`, `ci-web.yml` and `release.yml` take their runner from
+the organisation variable `PF_RUNS_ON`:
+
+```yaml
+runs-on: ${{ fromJSON(vars.PF_RUNS_ON || '"ubuntu-latest"') }}
+```
+
+| `PF_RUNS_ON` | The job runs on |
+| --- | --- |
+| unset or empty | a GitHub-hosted runner (`ubuntu-latest`), counted against the Actions allowance |
+| `"ubuntu-latest"` | the same |
+| `["self-hosted","pf"]` | the runner carrying those labels, which uses no hosted minutes |
+| anything else | nothing: the run fails at its start |
+
+The value is JSON, so a label list keeps its brackets and quotes. Deleting the
+variable returns every repository to hosted runners at once, with no change to
+any caller. This repository's own `ci.yml` keeps `ubuntu-latest` because the
+repository is public, and a public repository's hosted minutes are free.
+
+When the runner is down, jobs wait for it rather than fail. A queued job has
+already resolved its labels, so changing the variable does not move it: unset
+`PF_RUNS_ON` (or set it to `"ubuntu-latest"`), cancel the waiting runs, then
+re-run them, and the new runs resolve to hosted. Set the variable back once the
+runner is up.
+
+A public repository that calls these workflows with the switch set to the
+self-hosted runner queues forever: the runner group excludes public
+repositories, so no runner ever takes the job. Public repositories stay on
+`ubuntu-latest`, whose minutes are free.
+
+An invalid value fails the run at its start as a workflow file issue, with no job
+and no minutes used, and GitHub's message doesn't name the variable. When a run
+fails that way and the workflow file is unchanged, check `PF_RUNS_ON` first.
+
 ## A repository's own side
 
 ```yaml
