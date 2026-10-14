@@ -682,15 +682,20 @@ def _build_parser() -> argparse.ArgumentParser:
         default=usage.DEFAULT_FROM_DAY,
         help=f"The day of the month the projection starts to warn on (default: {usage.DEFAULT_FROM_DAY}).",
     )
-    usage_parser.add_argument("--today", type=datetime.date.fromisoformat, help=argparse.SUPPRESS)
+    usage_parser.add_argument("--now", type=_utc_instant, help=argparse.SUPPRESS)
 
     return parser
 
 
+def _utc_instant(text: str) -> datetime.datetime:
+    instant = datetime.datetime.fromisoformat(text)
+    return instant if instant.tzinfo else instant.replace(tzinfo=datetime.UTC)
+
+
 def _main_usage(args: argparse.Namespace) -> int:
-    today = args.today or datetime.datetime.now(datetime.UTC).date()
+    now = args.now or datetime.datetime.now(datetime.UTC)
     try:
-        line, status = usage.usage(args.org, args.allowance, args.from_day, today)
+        line, status = usage.usage(args.org, args.allowance, args.from_day, now)
     except subprocess.CalledProcessError as exc:
         stderr = (exc.stderr or str(exc)).strip()
         print(f"productforge-config: gh api failed: {stderr}", file=sys.stderr)

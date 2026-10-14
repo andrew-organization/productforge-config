@@ -537,8 +537,10 @@ directly.
 `productforge-config usage --org ORG [--allowance MINUTES] [--from-day DAY]`
 reads `organizations/ORG/settings/billing/usage/summary` through `gh api` (the
 caller's own `gh` login, which needs the organisation's billing read access),
-adds up the current month's Actions items measured in minutes, projects the
-month evenly and prints one line:
+adds up the current month's Actions items measured in minutes (the month is
+named explicitly in the request, in UTC), projects the month evenly from the
+time elapsed since it began (fractional days, so part-way through a day is not
+counted as a whole one) and prints one line:
 
 ```text
 Actions: 2161 of 3000 minutes used, day 14 of 31, projected 4785
