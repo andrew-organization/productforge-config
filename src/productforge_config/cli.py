@@ -26,9 +26,11 @@ version is validated against VERSION_RE first, so an invalid one is
 refused rather than half-applied.
 
 `productforge-config github check --repo <owner/name>` and `... github
-apply --repo <owner/name>`: check or apply settings/github.json (see
-github.py) against a live repository via `gh api`. `check` never writes
-anything; `apply` needs repository admin rights on the target.
+apply --repo <owner/name>`, each taking `--variant`, `--product` and
+`--required-check`: check or apply settings/github.json's protection
+variant (see github.py) against a live repository, public or private, via
+`gh api`. `check` never writes anything; `apply` needs repository admin
+rights on the target.
 
 Stdlib-only by design: this runs via `uvx --from git+...`, in whatever
 repository the person runs it in, and reads the shared settings bundled
@@ -636,23 +638,26 @@ def _build_parser() -> argparse.ArgumentParser:
 
     github_parser = subparsers.add_parser(
         "github",
-        help="Check or apply the GitHub repository settings every ProductForge repository shares "
-        "(settings/github.json).",
+        help="Check or apply the GitHub repository settings and the protection variants every ProductForge "
+        "repository shares (settings/github.json).",
     )
     github_subparsers = github_parser.add_subparsers(dest="github_command", required=True)
 
     check_parser = github_subparsers.add_parser(
         "check",
-        help="Print each setting whose live value differs from settings/github.json; "
+        help="Print each setting whose live value differs from settings/github.json's variant; "
         "exit 1 if any differ, 0 if none do.",
     )
     check_parser.add_argument("--repo", required=True, help="The repository to check, as owner/name.")
+    _add_variant_arguments(check_parser)
 
     apply_parser = github_subparsers.add_parser(
         "apply",
-        help="Apply settings/github.json to a live repository, idempotently. Needs repository admin rights.",
+        help="Apply settings/github.json's variant to a live repository, public or private, idempotently. "
+        "Needs repository admin rights.",
     )
     apply_parser.add_argument("--repo", required=True, help="The repository to apply settings to, as owner/name.")
+    _add_variant_arguments(apply_parser)
 
     return parser
 
@@ -719,17 +724,41 @@ def _main_ports(args: argparse.Namespace) -> int:
     return 0
 
 
+def _add_variant_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--variant",
+        default=github.DEFAULT_VARIANT,
+        help="The protection variant: standard (default), product, publishes or block-only.",
+    )
+    parser.add_argument(
+        "--product",
+        help="The repository's value of the organisation's property `product`. Without it, apply leaves the "
+        "value as it is and check reports only a missing one.",
+    )
+    parser.add_argument(
+        "--required-check",
+        action="append",
+        default=[],
+        dest="required_checks",
+        help="The status check main requires; repeatable. Default: `ci / ci` for product, `ci` for standard and "
+        "publishes. Refused with block-only, which requires no check.",
+    )
+
+
 def _main_github(args: argparse.Namespace) -> int:
     try:
         if args.github_command == "check":
-            diffs = github.check(args.repo)
-            for line in diffs:
+            diffs, notes = github.check_report(args.repo, args.variant, args.product, args.required_checks)
+            for line in diffs + notes:
                 print(line)
             return 1 if diffs else 0
-        applied = github.apply(args.repo)
+        applied = github.apply(args.repo, args.variant, args.product, args.required_checks)
         for line in applied:
             print(line)
         return 0
+    except github.GithubError as exc:
+        print(f"productforge-config: {exc}", file=sys.stderr)
+        return 2
     except subprocess.CalledProcessError as exc:
         stderr = (exc.stderr or str(exc)).strip()
         print(f"productforge-config: gh api failed: {stderr}", file=sys.stderr)

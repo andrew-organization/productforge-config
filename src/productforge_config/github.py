@@ -3,20 +3,40 @@ repository shares — settings/github.json, bundled into this package the
 same way settings/python.toml and settings/markdownlint.jsonc are (see
 _bundled.py).
 
-`check(repo)` is read-only: it reads the live repository through `gh api`
-and returns a line for each setting whose live value differs from the
-file, in `"<section>.<key>: <live> -> <wanted>"` shape (or, for the
-ruleset, one line per differing field, or one "missing" line when it
-doesn't exist yet). It never writes anything.
+The file holds the repository fields, the Actions workflow permissions, a
+set of named `rulesets` and the `variants` that bundle them. A variant
+names the rulesets it applies, may `extends` another (inheriting its
+rulesets, bypass actors and default required checks), and may add
+`bypass_actors` (written into the ruleset that requires a pull request to
+change `main`) or `required_checks` (the status checks that ruleset
+requires by default). The variants are `standard` (the default), `product`
+(`standard` requiring `ci / ci`, the name a job calling a reusable workflow
+reports), `publishes` (`standard` plus the owner as an always-bypass actor)
+and `block-only` (blocks rewriting and deleting `main`, requires no check).
 
-`apply(repo)` applies the file: `gh api -X PATCH repos/<repo>` for the
+`check(repo, ...)` is read-only: it reads the live repository through `gh
+api` and returns a line for each setting whose live value differs from the
+file, in `"<section>.<key>: <live> -> <wanted>"` shape (or, for a ruleset,
+one line per differing field, or one "missing" line when it doesn't exist
+yet). It never writes anything. `check_report` returns the same lines plus
+the notes that are not differences, such as rules skipped on a plan without
+them.
+
+`apply(repo, ...)` applies the file: `gh api -X PATCH repos/<repo>` for the
 repository fields, `gh api -X PUT repos/<repo>/actions/permissions/workflow`
-for the Actions default workflow permissions, and — only when the live
-repository is public — the ruleset requiring a pull request to change
-main, created if it doesn't exist yet or updated in place by name if it
-does. Every call sends the file's full values rather than only the ones
-that differ, so running it twice in a row is a no-op the second time:
-idempotent by construction, not by pre-checking a diff first.
+for the Actions default workflow permissions, when a product is given
+`gh api -X PATCH repos/<repo>/properties/values` for the organisation's
+custom property `product`, and the variant's rulesets, each created if no
+ruleset of that name exists and updated in place by name if one does, on a
+repository of any visibility. Where GitHub answers that the plan offers no
+rules for the repository, the rules are reported as skipped with GitHub's
+reason and the rest still applies. Every call sends the file's full values
+rather than only the ones that differ, so running it twice in a row is a
+no-op the second time: idempotent by construction, not by pre-checking a
+diff first.
+
+An unknown variant, or a required check given with `block-only`, is refused
+(`GithubError`) before any `gh` call.
 
 Both shell out to `gh api` rather than talking to the GitHub API
 directly, so this stays stdlib-only and reuses the caller's own `gh`
@@ -24,16 +44,28 @@ authentication — the same reason cli.py's `update` command never fetches
 its shared settings over the network itself.
 """
 
+import copy
 import json
+import re
 import subprocess
 from typing import Any
 
 from productforge_config._bundled import bundled_settings_dir
 
-# The fields compared (and applied) on a ruleset — everything settings/github.json's
-# "ruleset_public_only" carries except its own "name", which identifies it rather
-# than describing a value to converge on.
+# The fields compared (and applied) on a ruleset — everything a ruleset in
+# settings/github.json carries; its name is the key it is stored under.
 _RULESET_FIELDS = ("target", "enforcement", "bypass_actors", "conditions", "rules")
+
+DEFAULT_VARIANT = "standard"
+
+PRODUCT_PROPERTY = "product"
+
+# GitHub's answer for a private repository on a plan without rules.
+_NO_RULES_MARKER = "Upgrade to GitHub"
+
+
+class GithubError(Exception):
+    """A request the command refuses, or a failure it names."""
 
 
 def _bundled_github_settings() -> dict[str, Any]:
@@ -73,25 +105,8 @@ def _post(endpoint: str, body: dict[str, Any]) -> Any:
     return _run_gh(["api", "-X", "POST", endpoint, "--input", "-"], body)
 
 
-def _find_ruleset_summary(repo: str, name: str) -> dict[str, Any] | None:
-    """The `{id, name, ...}` summary of the named ruleset from `GET
-    repos/<repo>/rulesets`'s list — which doesn't carry the full
-    conditions/rules a summary would need to be diffed against, only
-    enough to find the ruleset's id (see `_get_ruleset` for the rest).
-    """
-    for summary in _get(f"repos/{repo}/rulesets") or []:
-        if summary.get("name") == name:
-            return summary
-    return None
-
-
 def _get_ruleset(repo: str, ruleset_id: int) -> dict[str, Any]:
     return _get(f"repos/{repo}/rulesets/{ruleset_id}")
-
-
-def _is_public(repo: str) -> tuple[bool, dict[str, Any]]:
-    live = _get(f"repos/{repo}")
-    return not live.get("private", True), live
 
 
 def _holds(live: Any, wanted: Any) -> bool:
@@ -107,15 +122,102 @@ def _holds(live: Any, wanted: Any) -> bool:
     return live == wanted
 
 
-def check(repo: str) -> list[str]:
-    """Every setting in settings/github.json whose live value on `repo`
-    differs from the file, as one line per difference. An empty list
-    means `repo` already matches the file exactly. Read-only: no `gh api`
-    call here writes anything.
+def _gh_reason(exc: subprocess.CalledProcessError) -> str:
+    """Return GitHub's own message from a failed `gh api` call: its stderr without
+    the `gh: ` prefix and the trailing `(HTTP nnn)`.
+    """
+    text = (exc.stderr or str(exc)).strip()
+    text = text.removeprefix("gh: ")
+    return re.sub(r"\s*\(HTTP \d+\)$", "", text)
+
+
+def _rulesets_unavailable(exc: subprocess.CalledProcessError) -> str | None:
+    """Return GitHub's reason when `exc` is the answer for a plan without rules, else None."""
+    reason = _gh_reason(exc)
+    return reason if _NO_RULES_MARKER in reason else None
+
+
+def _resolve(settings: dict[str, Any], variant: str, required_checks: list[str]) -> dict[str, dict[str, Any]]:
+    """The rulesets `variant` applies, by name, as the full bodies to send:
+    the variant's inherited bypass actors written into the ruleset that
+    requires a pull request, and the required checks (the ones given, else
+    the variant's default, else the file's) into each ruleset requiring
+    status checks. Refuses an unknown variant, or checks given to a variant
+    that requires none, before any `gh` call.
+    """
+    variants = settings["variants"]
+    if variant not in variants:
+        raise GithubError(f"unknown variant {variant!r}; choose one of {', '.join(variants)}")
+
+    chain = []
+    name: str | None = variant
+    while name is not None:
+        chain.append(variants[name])
+        name = variants[name].get("extends")
+    chain.reverse()  # base first, so the variant's own entries win
+
+    ruleset_names: list[str] = []
+    bypass_actors: list[dict[str, Any]] = []
+    default_checks: list[str] | None = None
+    for layer in chain:
+        ruleset_names = layer.get("rulesets", ruleset_names)
+        bypass_actors = layer.get("bypass_actors", bypass_actors)
+        default_checks = layer.get("required_checks", default_checks)
+
+    rulesets = {}
+    for ruleset_name in ruleset_names:
+        body = copy.deepcopy(settings["rulesets"][ruleset_name])
+        body["name"] = ruleset_name
+        if any(rule["type"] == "pull_request" for rule in body["rules"]):
+            body["bypass_actors"] = copy.deepcopy(bypass_actors)
+        rulesets[ruleset_name] = body
+
+    checks_rules = [
+        rule for body in rulesets.values() for rule in body["rules"] if rule["type"] == "required_status_checks"
+    ]
+    if required_checks and not checks_rules:
+        raise GithubError(f"--required-check can't be used with the {variant} variant, which requires no check")
+    for rule in checks_rules:
+        contexts = required_checks or default_checks
+        if contexts:
+            rule["parameters"]["required_status_checks"] = [{"context": context} for context in contexts]
+    return rulesets
+
+
+def _normalised_bypass_actors(actors: Any) -> Any:
+    """`actors` with an `OrganizationAdmin` actor's id dropped: GitHub reads
+    it back with `actor_id: null`, so it is compared on its type and mode.
+    """
+    if not isinstance(actors, list):
+        return actors
+    return [
+        {k: v for k, v in actor.items() if k != "actor_id"} if actor.get("actor_type") == "OrganizationAdmin" else actor
+        for actor in actors
+    ]
+
+
+def _live_product(repo: str) -> str | None:
+    for entry in _get(f"repos/{repo}/properties/values") or []:
+        if entry.get("property_name") == PRODUCT_PROPERTY:
+            return entry.get("value")
+    return None
+
+
+def check_report(
+    repo: str,
+    variant: str = DEFAULT_VARIANT,
+    product: str | None = None,
+    required_checks: list[str] | None = None,
+) -> tuple[list[str], list[str]]:
+    """The differences between settings/github.json's `variant` and the live
+    `repo` (one line each) and the notes that are not differences. Read-only:
+    no `gh api` call here writes anything.
     """
     settings = _bundled_github_settings()
-    is_public, live_repo = _is_public(repo)
+    rulesets = _resolve(settings, variant, required_checks or [])
+    live_repo = _get(f"repos/{repo}")
     diffs = []
+    notes = []
 
     for key, wanted in settings["repository"].items():
         live = live_repo.get(key)
@@ -128,31 +230,67 @@ def check(repo: str) -> list[str]:
         if live != wanted:
             diffs.append(f"actions_workflow_permissions.{key}: {live!r} -> {wanted!r}")
 
-    if is_public:
-        ruleset = settings["ruleset_public_only"]
-        name = ruleset["name"]
-        summary = _find_ruleset_summary(repo, name)
+    live_product = _live_product(repo)
+    if product is None:
+        if live_product is None:
+            diffs.append(f"{PRODUCT_PROPERTY}: missing")
+    elif live_product != product:
+        live_text = "missing" if live_product is None else repr(live_product)
+        diffs.append(f"{PRODUCT_PROPERTY}: {live_text} -> {product!r}")
+
+    try:
+        summaries = _get(f"repos/{repo}/rulesets") or []
+    except subprocess.CalledProcessError as exc:
+        reason = _rulesets_unavailable(exc)
+        if reason is None:
+            raise
+        notes.append(f"ruleset: skipped ({reason})")
+        return diffs, notes
+
+    by_name = {summary.get("name"): summary for summary in summaries}
+    for name, ruleset in rulesets.items():
+        summary = by_name.get(name)
         if summary is None:
             diffs.append(f"ruleset {name!r}: missing")
-        else:
-            existing = _get_ruleset(repo, summary["id"])
-            for key in _RULESET_FIELDS:
-                wanted = ruleset.get(key)
-                live = existing.get(key)
-                if not _holds(live, wanted):
-                    diffs.append(f"ruleset {name!r}.{key}: {live!r} -> {wanted!r}")
+            continue
+        existing = _get_ruleset(repo, summary["id"])
+        for key in _RULESET_FIELDS:
+            wanted = ruleset.get(key)
+            live = existing.get(key)
+            if key == "bypass_actors":
+                wanted, live = _normalised_bypass_actors(wanted), _normalised_bypass_actors(live)
+            if not _holds(live, wanted):
+                diffs.append(f"ruleset {name!r}.{key}: {live!r} -> {wanted!r}")
 
-    return diffs
+    return diffs, notes
 
 
-def apply(repo: str) -> list[str]:
-    """Apply settings/github.json to `repo`, idempotently — safe to run
-    repeatedly, since every call sends the file's full values rather than
-    only a computed diff. Returns one line per action taken, for
+def check(
+    repo: str,
+    variant: str = DEFAULT_VARIANT,
+    product: str | None = None,
+    required_checks: list[str] | None = None,
+) -> list[str]:
+    """Every setting `variant` states in settings/github.json whose live
+    value on `repo` differs, as one line per difference. An empty list
+    means `repo` already matches exactly.
+    """
+    return check_report(repo, variant, product, required_checks)[0]
+
+
+def apply(
+    repo: str,
+    variant: str = DEFAULT_VARIANT,
+    product: str | None = None,
+    required_checks: list[str] | None = None,
+) -> list[str]:
+    """Apply settings/github.json's `variant` to `repo`, idempotently — safe
+    to run repeatedly, since every call sends the file's full values rather
+    than only a computed diff. Returns one line per action taken, for
     reporting. Needs repository admin rights on `repo`.
     """
     settings = _bundled_github_settings()
-    is_public, _ = _is_public(repo)
+    rulesets = _resolve(settings, variant, required_checks or [])
     actions = []
 
     _patch(f"repos/{repo}", settings["repository"])
@@ -161,18 +299,33 @@ def apply(repo: str) -> list[str]:
     _put(f"repos/{repo}/actions/permissions/workflow", settings["actions_workflow_permissions"])
     actions.append("actions_workflow_permissions: applied")
 
-    if not is_public:
-        actions.append("ruleset: skipped (private repository — branch rules aren't on the Free plan)")
+    if product is not None:
+        body = {"properties": [{"property_name": PRODUCT_PROPERTY, "value": product}]}
+        try:
+            _patch(f"repos/{repo}/properties/values", body)
+        except subprocess.CalledProcessError as exc:
+            raise GithubError(
+                f"couldn't set the organisation property {PRODUCT_PROPERTY!r} on {repo}: {_gh_reason(exc)}"
+            ) from exc
+        actions.append(f"{PRODUCT_PROPERTY}: set to {product!r}")
+
+    try:
+        summaries = _get(f"repos/{repo}/rulesets") or []
+    except subprocess.CalledProcessError as exc:
+        reason = _rulesets_unavailable(exc)
+        if reason is None:
+            raise
+        actions.append(f"ruleset: skipped ({reason})")
         return actions
 
-    ruleset = settings["ruleset_public_only"]
-    name = ruleset["name"]
-    summary = _find_ruleset_summary(repo, name)
-    if summary is None:
-        _post(f"repos/{repo}/rulesets", ruleset)
-        actions.append(f"ruleset {name!r}: created")
-    else:
-        _put(f"repos/{repo}/rulesets/{summary['id']}", ruleset)
-        actions.append(f"ruleset {name!r}: updated")
+    by_name = {summary.get("name"): summary for summary in summaries}
+    for name, ruleset in rulesets.items():
+        summary = by_name.get(name)
+        if summary is None:
+            _post(f"repos/{repo}/rulesets", ruleset)
+            actions.append(f"ruleset {name!r}: created")
+        else:
+            _put(f"repos/{repo}/rulesets/{summary['id']}", ruleset)
+            actions.append(f"ruleset {name!r}: updated")
 
     return actions
