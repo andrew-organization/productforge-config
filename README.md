@@ -590,6 +590,142 @@ failing `gh` call exits 2. GitHub's budget stops Actions at the allowance and
 warns nobody before it, so this is the early signal; run it daily to be told
 in time.
 
+## The supervisor for an ephemeral self-hosted runner
+
+`supervisor/runner_supervisor.py` runs a GitHub Actions job on a runner that
+exists for that one job. It is not part of the package and no kit installs it:
+it is copied to a host by hand, as below. It needs Python 3.10 or later and
+Docker, and nothing else.
+
+It registers one just-in-time (JIT) runner in a runner group
+(`POST orgs/ORG/actions/runners/generate-jitconfig`), starts it in a fresh
+`docker run --rm` container of the official runner image, and waits for the
+container to exit, which a JIT runner does after exactly one job and which
+deregisters it. It then removes the container and the registration (a runner
+that never got a job stays registered, offline, so it deletes it) and starts
+the next. A failed job, a registration call that fails and a stop mid-job each
+end the same way: container removed, registration deleted (see "State and
+stopping" for a registration GitHub still holds as busy). A job's files live
+in the container and go with it, so the next job finds nothing the last one
+wrote.
+
+**How it learns a job is queued: it doesn't ask.** One runner is always
+registered and idle; GitHub gives the next queued job for its labels to it,
+and its container ending is the signal to register the next. Polling for
+queued jobs instead would need read access to every repository's Actions on
+top of the right to register runners; this needs only the second, and a
+queued job waits until a runner exists, so there is never a queued job without
+one. An idle runner holds no job and no data.
+
+### What the host needs
+
+- A container runtime: `docker`, with its user able to run containers. While
+  `docker` is missing or its daemon is down the supervisor registers nothing: it
+  checks `docker info` before every registration and, failing, retries with a
+  backoff (doubling from `--retry-seconds`, to five minutes) rather than minting
+  a registration per attempt.
+- **Containers must not reach the EC2 instance metadata service**
+  (`169.254.169.254`), whose role credentials a job could otherwise read. On an
+  EC2 host set IMDSv2 required and the hop limit to 1, so a container on the
+  docker bridge, one hop further than the host, gets no answer:
+
+  ```sh
+  aws ec2 modify-instance-metadata-options --instance-id i-0123456789abcdef0 \
+    --http-tokens required --http-put-response-hop-limit 1 --http-endpoint enabled
+  ```
+
+  and attach no instance role the host does not need (ideally none), because
+  whatever the role grants is one misconfiguration from a job. At start the
+  supervisor proves it: it runs a short check container, confined as a job's is,
+  that asks `169.254.169.254` for anything, and refuses to start (exit 1, one
+  line) if it gets any HTTP answer at all, or cannot run the check. Pass
+  `--allow-metadata-reachable` to skip the check, only for a local test on a
+  machine that is not an EC2 instance.
+- The runner image, pinned by digest: the default `--image` is
+  `ghcr.io/actions/actions-runner@sha256:9644537b29b4799cb752a2f23a45a1e603cf74c3c5998241a1533f0e8c3dc649`,
+  the arm64 build of `:latest` on 2026-10-15, pulled on first use. A digest does
+  not move under the host, so a changed runner is a decision. To move it: read
+  the new digest with
+  `docker buildx imagetools inspect ghcr.io/actions/actions-runner:latest`
+  (use the manifest for `linux/arm64`, or the index digest at the top for any
+  architecture), add `--image ghcr.io/actions/actions-runner@sha256:NEW` to the
+  unit's `ExecStart`, and `systemctl daemon-reload && systemctl restart
+  productforge-runner-supervisor`. GitHub stops accepting a runner version
+  some weeks after a newer one ships, so move it at least that often.
+- Outbound HTTPS to `api.github.com`, `github.com`, `ghcr.io` and the
+  endpoints the runner itself uses. No inbound port.
+- A token that can register runners and nothing else: a fine-grained personal
+  access token whose resource owner is the organisation, with **no
+  repository access** and one organisation permission, **Self-hosted
+  runners: Read and write** (`organization_self_hosted_runners`). It reads no
+  repository, workflow, secret or setting, and the supervisor never gets more
+  than that. A personal access token is created in Settings, Developer
+  settings, Fine-grained personal access tokens; no API call creates one. The
+  same permission as a GitHub App's token is the call
+  `POST /app/installations/INSTALLATION_ID/access_tokens` with
+  `{"permissions": {"organization_self_hosted_runners": "write"}}`, an hour's
+  token that something on the host has to renew; the supervisor re-reads its
+  token file on every call, so a renewed file takes effect without a restart.
+  The runner group is created once by an owner, with `visibility` `selected`
+  and `allows_public_repositories` false, and its repositories set. After
+  creating or changing it, run a job and check it dispatches: a group's first
+  runners have sat idle until its repositories were set again.
+- **The host is never the production server.** A job builds an agent's code
+  and so can run anything; the host holds no production credential, and the
+  only secret on it is the registration token.
+
+### How a job container is confined
+
+Each job container starts with `--cap-drop ALL` (no Linux capability),
+`--security-opt no-new-privileges` (no setuid escalation), `--pids-limit`
+(`--pids-limit`, default 512) and `--memory` (`--memory`, default `4g`). The
+official image's runner is a non-root user and needs none of the capabilities,
+so a job runs as it did, and the start-up check runs under the same options.
+What the options take away from a job is `sudo`: a step that runs `sudo` (for
+example `sudo apt-get install`) fails, so install tools without it or bake them
+into a job's own container image. A job that needs more memory or processes
+raises the two limits in the unit's `ExecStart`.
+
+### Install as a service
+
+On the arm64 Linux host (systemd), as root:
+
+```sh
+useradd --system --create-home --groups docker pf-runner
+install -d /opt/productforge-runner /etc/productforge-runner
+install -m 0644 supervisor/runner_supervisor.py /opt/productforge-runner/
+install -m 0644 supervisor/productforge-runner-supervisor.service /etc/systemd/system/
+install -m 0640 -o root -g pf-runner /dev/stdin /etc/productforge-runner/token   # paste the token, then Ctrl-D
+# edit --org, --group and --labels in the unit, then:
+systemctl daemon-reload && systemctl enable --now productforge-runner-supervisor
+```
+
+Membership of the `docker` group is root on the host, which is why the host
+runs nothing else. The labels you pass are what a job's `runs-on` names, next
+to `self-hosted`.
+
+### State and stopping
+
+```sh
+journalctl -u productforge-runner-supervisor -f       # what it is doing
+python3 /opt/productforge-runner/runner_supervisor.py status \
+  --org YOUR-ORG --group YOUR-RUNNER-GROUP --token-file /etc/productforge-runner/token
+systemctl stop productforge-runner-supervisor         # removes the container, then the registration
+```
+
+Stopping removes the running container, then deletes its registration. GitHub
+can still hold a runner as busy for a moment after its container is gone and
+answers 422 to the delete; the supervisor retries that with a backoff (five
+attempts, about 45 seconds, never fatal) and, if the runner is still busy, logs
+that it left it and carries on. A registration already gone (404) is fine. The
+next start removes any it left. The unit allows two minutes to stop.
+
+`status` lists the runners registered under the supervisor's name prefix
+(`pf-`, `--prefix`) and its containers. Stop it before switching jobs back to
+hosted runners on purpose; if it is killed rather than stopped, the next start
+removes the registrations and containers it left. Run one supervisor per
+prefix and group.
+
 ## Developing this repository
 
 `make install`, `make lint`, `make test` — the same three targets every
