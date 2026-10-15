@@ -109,10 +109,13 @@ def flutter_lookup(shipped: Path) -> tuple[str, str]:
     return script, setup["if"]
 
 
-def run_lookup(shipped: Path, tmp_path: Path, wanted: str, reports: str | None) -> str:
-    """What the lookup writes for a repository pinning `wanted`, with a `flutter` reporting `reports` on PATH."""
+def run_lookup(shipped: Path, tmp_path: Path, wanted: str | None, reports: str | None, fvmrc: str | None = None) -> str:
+    """What the lookup writes for a repository pinning `wanted` (or with `fvmrc` as .fvmrc), given `flutter` on PATH."""
     script, _ = flutter_lookup(shipped)
-    (tmp_path / ".fvmrc").write_text(json.dumps({"flutter": wanted}))
+    if fvmrc is not None:
+        (tmp_path / ".fvmrc").write_text(fvmrc)
+    elif wanted is not None:
+        (tmp_path / ".fvmrc").write_text(json.dumps({"flutter": wanted}))
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     if reports is not None:
@@ -149,3 +152,17 @@ def test_the_setup_skips_flutter_action_only_when_the_flutter_on_path_is_the_one
         "another version": "preinstalled=false",
         "no flutter": "preinstalled=false",
     }
+
+
+def test_the_setup_reports_not_preinstalled_when_fvmrc_is_missing_or_names_no_flutter(
+    shipped: Path, tmp_path: Path
+) -> None:
+    cases = {
+        "no fvmrc": {"wanted": None},
+        "no flutter key": {"wanted": None, "fvmrc": json.dumps({"flavors": {}})},
+        "not json": {"wanted": None, "fvmrc": "not json"},
+    }
+    for name, kwargs in cases.items():
+        case = tmp_path / name.replace(" ", "-")
+        case.mkdir()
+        assert run_lookup(shipped, case, reports="3.44.7", **kwargs) == "preinstalled=false", name

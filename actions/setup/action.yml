@@ -36,7 +36,11 @@ runs:
       run: |
         python3 - >> "$GITHUB_OUTPUT" <<'PY'
         import json, subprocess
-        wanted = json.load(open(".fvmrc"))["flutter"]
+        try:
+            wanted = json.load(open(".fvmrc"))["flutter"]
+        except (OSError, ValueError, KeyError):
+            print("preinstalled=false")
+            raise SystemExit
         try:
             command = ["flutter", "--version", "--machine"]
             text = subprocess.run(command, capture_output=True, text=True, check=True).stdout

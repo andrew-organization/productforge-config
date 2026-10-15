@@ -8,6 +8,7 @@ outcome a case scripted for each container: `pass`, `fail` or `hang` (a job that
 import http.server
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -361,13 +362,24 @@ def test_the_image_is_built_from_the_digest_the_supervisor_runs_by_default(shipp
     + ["docker-ce", "docker-compose-plugin"],
 )
 def test_the_image_installs_the_tools_the_kits_use(shipped: Path, tool: str) -> None:
-    assert f" {tool}" in (shipped / RUNNER_IMAGE / "Dockerfile").read_text()
+    dockerfile = (shipped / RUNNER_IMAGE / "Dockerfile").read_text()
+    installed = {
+        word
+        for block in re.findall(r"apt-get install\b(.*?)(?:&&|$)", dockerfile.replace("\\\n", " "), flags=re.S)
+        for word in block.split()
+        if not word.startswith("-")
+    }
+    assert tool in installed
 
 
 def test_the_entrypoint_starts_the_engine_then_hands_the_runner_to_the_runner_user(shipped: Path) -> None:
     entrypoint = shipped / RUNNER_IMAGE / "entrypoint.sh"
     text = entrypoint.read_text()
     assert os.access(entrypoint, os.X_OK)
+    commands = [line.strip() for line in text.splitlines() if line.strip() and not line.strip().startswith("#")]
+    assert commands[-1] == 'HOME=/home/runner exec runuser --user runner -- "$@"'
+    (engine,) = (line for line in commands if "dockerd" in line and "--host" in line)
+    assert engine.startswith("env -u ACTIONS_RUNNER_INPUT_JITCONFIG dockerd ")
     assert text.index("dockerd") < text.index("runuser --user runner")
     assert "usermod --append --groups docker runner" in (shipped / RUNNER_IMAGE / "Dockerfile").read_text()
     assert 'ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]' in (shipped / RUNNER_IMAGE / "Dockerfile").read_text()
@@ -550,3 +562,15 @@ def test_the_image_carries_the_flutter_the_repositories_pin(shipped: Path) -> No
     version = next(line for line in dockerfile.splitlines() if line.startswith("ARG FLUTTER_VERSION=")).split("=")[1]
     assert version == json.loads((shipped / "settings" / "fvmrc").read_text())["flutter"]
     assert "git clone https://github.com/flutter/flutter.git --branch" in dockerfile and "precache --web" in dockerfile
+
+
+def test_the_image_verifies_what_it_downloads_with_pinned_build_args(shipped: Path) -> None:
+    dockerfile = (shipped / RUNNER_IMAGE / "Dockerfile").read_text()
+    args = dict(re.findall(r'^ARG (\w+)="?([^"\n]*)"?$', dockerfile, flags=re.M))
+    assert re.fullmatch(r"[0-9a-f]{64}", args["TAPLO_SHA256"])
+    assert re.fullmatch(r"[0-9a-f]{40}", args["FLUTTER_COMMIT"])
+    assert re.fullmatch(r"[0-9A-F]{40}", args["DOCKER_KEY_FINGERPRINT"])
+    assert all(re.fullmatch(r"[0-9A-F]{40}", f) for f in args["GITHUB_CLI_KEY_FINGERPRINTS"].split())
+    assert 'echo "${TAPLO_SHA256}  /tmp/taplo.gz" | sha256sum --check -' in dockerfile
+    assert '[ "$(git -C "${FLUTTER_HOME}" rev-parse HEAD)" = "${FLUTTER_COMMIT}" ]' in dockerfile
+    assert "${DOCKER_KEY_FINGERPRINT}" in dockerfile and "${GITHUB_CLI_KEY_FINGERPRINTS}" in dockerfile

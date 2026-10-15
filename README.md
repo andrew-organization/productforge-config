@@ -724,6 +724,14 @@ unchanged. When `settings/fvmrc` moves, change `FLUTTER_VERSION` in the same
 release and rebuild the image as below; until it is rebuilt, a job on the runner
 finds a different Flutter, falls back to `flutter-action`, and fails on arm64.
 
+**What a rebuild reproduces.** The same pinned base image (`BASE_IMAGE`), the same
+Flutter commit (`FLUTTER_COMMIT`, checked against the clone), the same taplo
+binary (`TAPLO_SHA256`) and the same Docker and GitHub CLI apt signing keys
+(checked against their published fingerprints); the build fails if any differs.
+The apt packages are not pinned: a rebuild installs their versions at the time
+it runs. Changing `FLUTTER_VERSION` or `TAPLO_VERSION` means changing
+`FLUTTER_COMMIT` or `TAPLO_SHA256` with it.
+
 On the host, install Sysbox CE from its release (Ubuntu 24.04, arm64 shown;
 check the
 [releases](https://github.com/nestybox/sysbox/releases) for the newest):
