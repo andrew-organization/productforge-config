@@ -760,8 +760,8 @@ Then point the unit at it and restart, keeping its other options:
 
 ```sh
 # in ExecStart: --image productforge-runner:v2.8.0 --runtime sysbox-runc
-systemctl daemon-reload && systemctl restart productforge-runner-supervisor
-journalctl -u productforge-runner-supervisor -n 20   # the metadata check passed; a runner registered
+systemctl daemon-reload && systemctl restart 'productforge-runner-supervisor@*'
+journalctl -u productforge-runner-supervisor@1 -n 20  # the metadata check passed; a runner registered
 ```
 
 The image is built on the host, never pulled: a `--image` with no registry is a
@@ -777,11 +777,14 @@ On the arm64 Linux host (systemd), as root:
 useradd --system --create-home --groups docker pf-runner
 install -d /opt/productforge-runner /etc/productforge-runner
 install -m 0644 supervisor/runner_supervisor.py /opt/productforge-runner/
-install -m 0644 supervisor/productforge-runner-supervisor.service /etc/systemd/system/
+install -m 0644 'supervisor/productforge-runner-supervisor@.service' /etc/systemd/system/
 install -m 0640 -o root -g pf-runner /dev/stdin /etc/productforge-runner/token   # paste the token, then Ctrl-D
-# edit --org, --group and --labels in the unit, then:
-systemctl daemon-reload && systemctl enable --now productforge-runner-supervisor
+# edit --org, --group and --labels in the unit (and --image and --runtime on a Sysbox host), then:
+systemctl daemon-reload && systemctl enable --now productforge-runner-supervisor@1
 ```
+
+The unit is a systemd template: `@1` is one runner, and each further number is another (see [Running several
+runners](#running-several-runners-on-one-server)).
 
 Membership of the `docker` group is root on the host, which is why the host
 runs nothing else. The labels you pass are what a job's `runs-on` names, next
@@ -790,10 +793,10 @@ to `self-hosted`.
 ### State and stopping
 
 ```sh
-journalctl -u productforge-runner-supervisor -f       # what it is doing
+journalctl -u productforge-runner-supervisor@1 -f     # what slot 1 is doing
 python3 /opt/productforge-runner/runner_supervisor.py status \
-  --org YOUR-ORG --group YOUR-RUNNER-GROUP --token-file /etc/productforge-runner/token
-systemctl stop productforge-runner-supervisor         # removes the container, then the registration
+  --org YOUR-ORG --group YOUR-RUNNER-GROUP --prefix pf1 --token-file /etc/productforge-runner/token
+systemctl stop productforge-runner-supervisor@1       # removes the container, then the registration
 ```
 
 Stopping removes the running container, then deletes its registration. GitHub
@@ -804,10 +807,55 @@ that it left it and carries on. A registration already gone (404) is fine. The
 next start removes any it left. The unit allows two minutes to stop.
 
 `status` lists the runners registered under the supervisor's name prefix
-(`pf-`, `--prefix`) and its containers. Stop it before switching jobs back to
+(`pf1-` for slot 1, `--prefix`) and its containers. Stop it before switching jobs back to
 hosted runners on purpose; if it is killed rather than stopped, the next start
 removes the registrations and containers it left. Run one supervisor per
 prefix and group.
+
+### Running several runners on one server
+
+Each `productforge-runner-supervisor@N` runs one supervisor, so `@1` to `@3` give three runners and three jobs at
+once. Instance `N` has its own name prefix `pf<N>` (runners `pf1-<random>`, `pf2-<random>`, ...), its own state
+file `/var/lib/productforge-runner/activity-<N>`, and its own confined job container. All share the group and
+labels in the unit. The start-up sweep of a slot removes only registrations and containers under its own prefix
+and its own `productforge.runner-supervisor=pf<N>` label, never another slot's: the prefixes are matched with
+their trailing dash, so `pf1-` does not match `pf10-` or `pf2-`, and none matches the old single unit's `pf-`.
+
+```sh
+systemctl enable --now productforge-runner-supervisor@{1,2,3}   # the number of runners is the number of instances
+systemctl disable --now productforge-runner-supervisor@3        # one fewer
+```
+
+**Sizing per runner.** `--memory` and `--pids-limit` in the unit confine each job's container, so size them as a
+share of the host, leaving room for the host, Docker and the Sysbox runtime. The defaults suit three runners on a
+`t4g.xlarge` (4 vCPU, 16 GB): `--memory 4g` each, so 12 GB for jobs and about 4 GB for the host, and `--pids-limit
+512` each. CPU is not limited, so three busy jobs share the four vCPUs. For another count or instance size, set
+the memory to about (host memory minus 4 GB) divided by the number of runners, in the one template, and restart the
+instances.
+
+**Cost.** A `t4g.xlarge` in eu-west-1 costs about $0.15 an hour while it runs, nothing for compute while it is
+stopped. With the on-demand start and the idle stop, a typical month is about $7 to $10; the ceiling, running all
+month, is about $110. Credits stay `standard`, so bursting never bills. The instance type and the AWS budget alert
+are billing settings, changed outside this repository.
+
+**Migrating from the single unit.** The single unit `productforge-runner-supervisor.service` (prefix `pf`, state
+file `activity`) is replaced by the template. The live server runs it with `--image productforge-runner:v2.8.0
+--runtime sysbox-runc --org andrew-organization --group pf --labels pf`; put those into the template's
+`ExecStart` (a copy of the file edited once serves every slot), then, as root:
+
+```sh
+systemctl disable --now productforge-runner-supervisor.service   # removes its container and registration
+rm /etc/systemd/system/productforge-runner-supervisor.service /var/lib/productforge-runner/activity
+install -m 0644 'supervisor/productforge-runner-supervisor@.service' /etc/systemd/system/
+# edit ExecStart: --image productforge-runner:v2.8.0 --runtime sysbox-runc --org andrew-organization --group pf --labels pf
+install -m 0644 supervisor/idle_stop.py /opt/productforge-runner/
+install -m 0644 supervisor/productforge-runner-idle-stop.service /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now productforge-runner-supervisor@{1,2,3}
+```
+
+Stop the single unit first: it removes its own runner and container, and the idle stop's glob `activity*` would
+otherwise also read its old `activity` file, which is why that file is removed.
 
 ## Starting the runner's server on demand, and stopping it when idle
 
@@ -885,16 +933,19 @@ start-instances`). Turning it back on starts it with the next queued job.
 
 The instance's shutdown behaviour is `stop`, so `shutdown -h now` on it stops the instance. The supervisor runs as
 `pf-runner`, in the `docker` group, and is not given the right to stop the host. Instead it records its activity
-in `/var/lib/productforge-runner/activity` (`--state-file`): `busy <epoch>`, refreshed every 10 seconds
+in its own file, `/var/lib/productforge-runner/activity-<N>` for slot N (`--state-file`): `busy <epoch>`, refreshed every 10 seconds
 (`--activity-poll-seconds`) while GitHub reports its runner running a job, and `idle <epoch>`, written once when its
 last job ended or it started and left unchanged while it waits. A job the supervisor cannot ask GitHub about counts as busy.
 
-`supervisor/idle_stop.py`, run every minute by the root timer `productforge-runner-idle-stop.timer`, reads that
-file and runs `shutdown -h now` once the host has been idle for `--idle-stop-minutes` (default 15). It never stops
-the host while the file says `busy` and is fresh, so it never stops a host a job container is running on, and a
+`supervisor/idle_stop.py`, run every minute by the root timer `productforge-runner-idle-stop.timer`, reads every
+file matching `--state-glob` (default `/var/lib/productforge-runner/activity*`, one per runner) and runs `shutdown -h
+now` once the host has been idle for `--idle-stop-minutes` (default 15). Each file's idle time is counted on its own,
+and the host's is the least of them: one runner `busy` and fresh keeps the host up, and the host stops only when
+every runner has been idle for the quiet period. The re-read just before shutting down covers every file. It never
+stops the host while any file says `busy` and is fresh, so it never stops a host a job container is running on, and a
 job that ends restarts the quiet period. A `busy` record older than 5 minutes (a supervisor that died) counts as
 idle from its last refresh; the idle time is counted from the later of the file's epoch and the host's boot, and
-with no readable file the boot time stands in for the last activity. `0`
+with no file the boot time stands in for the last activity. `0`
 disables the stop. The only things `pf-runner` can influence are that file's two words and its number, not
 anything the root timer runs.
 

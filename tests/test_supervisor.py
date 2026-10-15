@@ -266,6 +266,43 @@ def test_start_removes_what_a_previous_run_left_under_its_prefix_only(host: Host
     )
 
 
+def test_a_slots_start_removes_only_its_own_prefixs_leftovers_never_another_slots(
+    host: Host, endpoint: Endpoint
+) -> None:
+    endpoint.runners = {1: "pf1-old", 2: "pf2-busy", 3: "pf10-busy", 4: "pf-single", 5: "pf-1-odd"}
+    host.outcomes()
+    process = host.start("--prefix", "pf1", "--max-jobs", "0")
+    host.wait_for(lambda: "pf1-old" not in endpoint.names)
+    process.send_signal(signal.SIGTERM)
+    process.communicate(timeout=30)
+    assert sorted(endpoint.names) == ["pf-1-odd", "pf-single", "pf10-busy", "pf2-busy"]
+    assert "ps -aq --filter label=productforge.runner-supervisor=pf1" in host.docker_calls
+
+
+def test_the_single_runners_prefix_does_not_reach_the_slots_runners(host: Host, endpoint: Endpoint) -> None:
+    endpoint.runners = {1: "pf-old", 2: "pf1-busy", 3: "pf2-busy"}
+    host.outcomes()
+    process = host.start("--max-jobs", "0")  # the default prefix, pf
+    host.wait_for(lambda: "pf-old" not in endpoint.names)
+    process.send_signal(signal.SIGTERM)
+    process.communicate(timeout=30)
+    assert sorted(endpoint.names) == ["pf1-busy", "pf2-busy"]
+
+
+def test_the_template_unit_gives_each_slot_its_own_prefix_state_file_and_share_of_the_host(shipped: Path) -> None:
+    unit = (shipped / "supervisor" / "productforge-runner-supervisor@.service").read_text()
+    assert not (shipped / "supervisor" / "productforge-runner-supervisor.service").exists()
+    exec_start = re.search(r"^ExecStart=(.*?)^Restart=", unit, re.MULTILINE | re.DOTALL)
+    assert exec_start is not None
+    arguments = exec_start.group(1).replace("\\\n", " ").split()
+    assert arguments[arguments.index("--prefix") + 1] == "pf%i"
+    assert arguments[arguments.index("--state-file") + 1] == "/var/lib/productforge-runner/activity-%i"
+    assert arguments[arguments.index("--memory") + 1] == "4g"
+    assert arguments[arguments.index("--pids-limit") + 1] == "512"
+    assert "User=pf-runner" in unit and "StateDirectory=productforge-runner" in unit
+    assert "Description=ProductForge ephemeral runner supervisor, slot %i" in unit
+
+
 def test_a_group_that_does_not_exist_is_refused_before_anything_is_registered(host: Host, endpoint: Endpoint) -> None:
     process = subprocess.run(
         [sys.executable, str(host.script), "run", "--org", "acme", "--group", "missing", "--api-url", endpoint.url,
