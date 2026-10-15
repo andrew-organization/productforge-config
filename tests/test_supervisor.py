@@ -294,6 +294,100 @@ def test_the_default_limits_and_a_pinned_image_digest(host: Host) -> None:
     assert " ghcr.io/actions/actions-runner@sha256:" in run and ":latest" not in run
 
 
+def test_without_a_runtime_option_no_runtime_is_passed(host: Host) -> None:
+    host.outcomes("pass")
+    host.start("--max-jobs", "1").communicate(timeout=30)
+    (run,) = host.job_runs
+    assert "--runtime" not in run
+
+
+def test_a_sysbox_runtime_starts_the_job_and_the_check_under_it_without_the_capability_drop(host: Host) -> None:
+    host.outcomes("pass")
+    host.start("--max-jobs", "1", "--runtime", "sysbox-runc", "--pids-limit", "99", "--memory", "2g").communicate(
+        timeout=30
+    )
+    (run,) = host.job_runs
+    check = next(c for c in host.docker_calls if " curl " in c)
+    for call in (run, check):
+        assert "--runtime sysbox-runc" in call
+        assert "--cap-drop" not in call and "no-new-privileges" not in call
+        assert "--pids-limit 99" in call and "--memory 2g" in call
+
+
+def test_another_runtime_keeps_the_capability_drop_and_no_new_privileges(host: Host) -> None:
+    host.outcomes("pass")
+    host.start("--max-jobs", "1", "--runtime", "runsc").communicate(timeout=30)
+    (run,) = host.job_runs
+    assert "--runtime runsc" in run
+    assert "--cap-drop ALL" in run and "--security-opt no-new-privileges" in run
+
+
+@pytest.mark.parametrize("answer", ["200 401", "000 200"])
+def test_start_still_refuses_under_sysbox_when_metadata_is_readable(
+    host: Host, endpoint: Endpoint, answer: str
+) -> None:
+    (host.root / "metadata").write_text(answer)
+    process = host.start("--max-jobs", "1", "--runtime", "sysbox-runc")
+    _, err = process.communicate(timeout=30)
+    assert process.returncode == 1 and "instance metadata service" in err
+    assert endpoint.bodies == [] and host.job_runs == []
+
+
+def test_a_sysbox_start_passes_when_a_token_request_fails_and_a_request_without_one_answers_401(
+    host: Host, endpoint: Endpoint
+) -> None:
+    (host.root / "metadata").write_text("000 401")
+    host.outcomes("pass")
+    process = host.start("--max-jobs", "1", "--runtime", "sysbox-runc")
+    process.communicate(timeout=30)
+    assert process.returncode == 0 and len(host.job_runs) == 1
+
+
+RUNNER_IMAGE = Path("supervisor") / "runner-image"
+
+
+def test_the_image_is_built_from_the_digest_the_supervisor_runs_by_default(shipped: Path) -> None:
+    supervisor = (shipped / "supervisor" / "runner_supervisor.py").read_text()
+    default = next(line for line in supervisor.splitlines() if line.startswith("DEFAULT_IMAGE = ")).split('"')[1]
+    dockerfile = (shipped / RUNNER_IMAGE / "Dockerfile").read_text()
+    assert f"ARG BASE_IMAGE={default}" in dockerfile
+    assert "FROM ${BASE_IMAGE}" in dockerfile
+
+
+@pytest.mark.parametrize(
+    "tool",
+    ["make", "python3", "python3-venv", "build-essential", "git", "curl", "unzip", "xz-utils", "zip", "jq", "gh"]
+    + ["docker-ce", "docker-compose-plugin"],
+)
+def test_the_image_installs_the_tools_the_kits_use(shipped: Path, tool: str) -> None:
+    assert f" {tool}" in (shipped / RUNNER_IMAGE / "Dockerfile").read_text()
+
+
+def test_the_entrypoint_starts_the_engine_then_hands_the_runner_to_the_runner_user(shipped: Path) -> None:
+    entrypoint = shipped / RUNNER_IMAGE / "entrypoint.sh"
+    text = entrypoint.read_text()
+    assert os.access(entrypoint, os.X_OK)
+    assert text.index("dockerd") < text.index("runuser --user runner")
+    assert "usermod --append --groups docker runner" in (shipped / RUNNER_IMAGE / "Dockerfile").read_text()
+    assert 'ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]' in (shipped / RUNNER_IMAGE / "Dockerfile").read_text()
+
+
+def test_the_build_command_tags_the_image_with_the_release(host: Host, shipped: Path) -> None:
+    build = shipped / RUNNER_IMAGE / "build.sh"
+    done = subprocess.run(
+        [str(build), "v9.9.9"], env={**os.environ, "PATH": f"{host.root}:{os.environ['PATH']}"},
+        capture_output=True, text=True, check=False,
+    )  # fmt: skip
+    assert done.returncode == 0, done.stderr
+    (call,) = (c for c in host.docker_calls if c.startswith("build "))
+    assert "--tag productforge-runner:v9.9.9" in call and call.endswith(str(build.parent))
+
+
+def test_the_build_command_refuses_without_a_version(shipped: Path) -> None:
+    done = subprocess.run([str(shipped / RUNNER_IMAGE / "build.sh")], capture_output=True, text=True, check=False)
+    assert done.returncode == 2 and "usage" in done.stderr
+
+
 def test_start_refuses_when_a_container_can_get_a_metadata_token(host: Host, endpoint: Endpoint) -> None:
     (host.root / "metadata").write_text("200 401")
     process = host.start("--max-jobs", "1")
