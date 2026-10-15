@@ -327,6 +327,15 @@ def test_imdsv2_at_hop_limit_1_passes_though_a_request_without_a_token_answers_4
     assert process.returncode == 0 and err == "" and len(host.job_runs) == 1
 
 
+@pytest.mark.parametrize("output", ["", " ", "000", "000 abc", "200 401 000"])
+def test_a_metadata_check_whose_answer_cannot_be_read_is_a_refusal(host: Host, endpoint: Endpoint, output: str) -> None:
+    # Curl missing from the image prints only the separator; anything not two status codes is unreadable.
+    (host.root / "metadata").write_text(output)
+    process = host.start("--max-jobs", "1")
+    _, err = process.communicate(timeout=30)
+    assert process.returncode == 1 and "could not run the check" in err and endpoint.bodies == []
+
+
 def test_a_metadata_check_that_cannot_run_is_a_refusal(host: Host, endpoint: Endpoint) -> None:
     (host.root / "metadata").write_text("cannot-run")
     process = host.start("--max-jobs", "1")
