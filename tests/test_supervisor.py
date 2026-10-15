@@ -32,11 +32,9 @@ with (root / "calls.log").open("a") as log:
     log.write(" ".join(args) + "\\n")
 if args[0] == "info":
     sys.exit(1 if (root / "docker-down").exists() else 0)
-elif args[0] == "run" and "curl" in args:
-    answer = (root / "metadata").read_text() if (root / "metadata").exists() else "unreachable"
-    if answer == "unreachable":
-        print("000", end="")
-        sys.exit(7)
+elif args[0] == "run" and any("curl" in a for a in args):
+    # The metadata check: what the token request and the request without a token answer, as "TOKEN METADATA".
+    answer = (root / "metadata").read_text() if (root / "metadata").exists() else "000 000"
     if answer == "cannot-run":
         sys.exit(125)
     print(answer, end="")
@@ -296,24 +294,46 @@ def test_the_default_limits_and_a_pinned_image_digest(host: Host) -> None:
     assert " ghcr.io/actions/actions-runner@sha256:" in run and ":latest" not in run
 
 
-def test_start_refuses_when_a_container_can_reach_the_metadata_service(host: Host, endpoint: Endpoint) -> None:
-    (host.root / "metadata").write_text("200")
+def test_start_refuses_when_a_container_can_get_a_metadata_token(host: Host, endpoint: Endpoint) -> None:
+    (host.root / "metadata").write_text("200 401")
     process = host.start("--max-jobs", "1")
     out, err = process.communicate(timeout=30)
     assert process.returncode == 1
-    assert "can reach the instance metadata service at 169.254.169.254 (HTTP 200)" in err
+    assert "can read a session token from the instance metadata service at 169.254.169.254" in err
     assert "IMDSv2 with hop limit 1" in err
     assert endpoint.bodies == []  # nothing registered
     assert host.job_runs == []
     check = next(c for c in host.docker_calls if " curl " in c)
-    assert "--cap-drop ALL" in check and "http://169.254.169.254/" in check and check.startswith("run --rm ")
+    assert "--cap-drop ALL" in check and "http://169.254.169.254/latest/api/token" in check
+    assert check.startswith("run --rm ")
 
 
-def test_any_http_answer_from_the_metadata_service_is_a_refusal_even_a_401(host: Host, endpoint: Endpoint) -> None:
-    (host.root / "metadata").write_text("401")
+def test_start_refuses_when_a_container_can_read_metadata_without_a_token(host: Host, endpoint: Endpoint) -> None:
+    (host.root / "metadata").write_text("000 200")
     process = host.start("--max-jobs", "1")
     _, err = process.communicate(timeout=30)
-    assert process.returncode == 1 and "(HTTP 401)" in err and endpoint.bodies == []
+    assert process.returncode == 1 and "can read metadata without a token" in err and endpoint.bodies == []
+
+
+def test_imdsv2_at_hop_limit_1_passes_though_a_request_without_a_token_answers_401(
+    host: Host, endpoint: Endpoint
+) -> None:
+    # What a container on an EC2 instance with IMDSv2 required at hop limit 1 sees: the token's answer
+    # never arrives (000), and a request without a token is refused (401). Nothing can be read.
+    (host.root / "metadata").write_text("000 401")
+    host.outcomes("pass")
+    process = host.start("--max-jobs", "1")
+    _, err = process.communicate(timeout=30)
+    assert process.returncode == 0 and err == "" and len(host.job_runs) == 1
+
+
+@pytest.mark.parametrize("output", ["", " ", "000", "000 abc", "200 401 000"])
+def test_a_metadata_check_whose_answer_cannot_be_read_is_a_refusal(host: Host, endpoint: Endpoint, output: str) -> None:
+    # Curl missing from the image prints only the separator; anything not two status codes is unreadable.
+    (host.root / "metadata").write_text(output)
+    process = host.start("--max-jobs", "1")
+    _, err = process.communicate(timeout=30)
+    assert process.returncode == 1 and "could not run the check" in err and endpoint.bodies == []
 
 
 def test_a_metadata_check_that_cannot_run_is_a_refusal(host: Host, endpoint: Endpoint) -> None:
@@ -324,7 +344,7 @@ def test_a_metadata_check_that_cannot_run_is_a_refusal(host: Host, endpoint: End
 
 
 def test_the_flag_skips_the_metadata_check_for_a_host_that_is_not_ec2(host: Host, endpoint: Endpoint) -> None:
-    (host.root / "metadata").write_text("200")
+    (host.root / "metadata").write_text("200 200")
     host.outcomes("pass")
     process = host.start("--max-jobs", "1", "--allow-metadata-reachable")
     out, err = process.communicate(timeout=30)

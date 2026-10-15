@@ -39,8 +39,6 @@ DEFAULT_IMAGE = "ghcr.io/actions/actions-runner@sha256:9644537b29b4799cb752a2f23
 DEFAULT_MEMORY = "4g"
 DEFAULT_PIDS_LIMIT = 512
 METADATA_ADDRESS = "169.254.169.254"
-CURL_COULD_NOT_CONNECT = 7
-CURL_TIMED_OUT = 28
 DELETE_ATTEMPTS = 5
 DELETE_BACKOFF_CAP_SECONDS = 15.0
 DOCKER_BACKOFF_CAP_SECONDS = 300.0
@@ -233,44 +231,40 @@ def hardening(*, settings: Settings) -> list[str]:
 
 
 def check_metadata_unreachable(*, settings: Settings) -> None:
-    """Refuses to start when a container can reach the EC2 instance metadata service.
+    """Refuses to start when a container can read the EC2 instance metadata service.
 
-    Runs a short container, confined as a job's is, that asks 169.254.169.254 for anything at all; any
-    HTTP answer means a job could read the instance's role credentials. Only a refused or timed-out
-    connection passes. A check that cannot run is also a refusal.
+    Runs a short container, confined as a job's is, that asks 169.254.169.254 for a session token (IMDSv2)
+    and for metadata without one (IMDSv1). Either answering 200 means a job could read the instance's role
+    credentials. With IMDSv2 required at hop limit 1, the token's answer never reaches a container and a
+    request without a token is refused with 401, so both pass. A check that cannot run is also a refusal.
     """
     if settings.metadata_reachable_allowed:
         log(message=f"not checking that containers cannot reach {METADATA_ADDRESS}: --allow-metadata-reachable")
         return
+    probe = (
+        "curl --silent --output /dev/null --max-time 5 --write-out '%{http_code}' --request PUT "
+        f"--header 'X-aws-ec2-metadata-token-ttl-seconds: 60' http://{METADATA_ADDRESS}/latest/api/token; "
+        "printf ' '; "
+        "curl --silent --output /dev/null --max-time 5 --write-out '%{http_code}' "
+        f"http://{METADATA_ADDRESS}/latest/meta-data/"
+    )
     result = docker(
-        args=[
-            "run",
-            "--rm",
-            *hardening(settings=settings),
-            settings.image,
-            "curl",
-            "--silent",
-            "--output",
-            "/dev/null",
-            "--max-time",
-            "5",
-            "--write-out",
-            "%{http_code}",
-            f"http://{METADATA_ADDRESS}/latest/meta-data/",
-        ],
+        args=["run", "--rm", *hardening(settings=settings), settings.image, "sh", "-c", probe],
         settings=settings,
     )
-    answer = result.stdout.strip()
-    if result.returncode == 0 or answer not in ("", "000"):
-        raise SupervisorError(
-            f"a container can reach the instance metadata service at {METADATA_ADDRESS} (HTTP {answer or 'answer'}); "
-            "require IMDSv2 with hop limit 1 on the instance, or pass --allow-metadata-reachable on a host that "
-            "is not an EC2 instance"
-        )
-    if result.returncode not in (CURL_COULD_NOT_CONNECT, CURL_TIMED_OUT):
+    answers = result.stdout.split()
+    if len(answers) != 2 or not all(a.isdigit() and len(a) == 3 for a in answers):
         raise SupervisorError(
             f"could not run the check that containers cannot reach {METADATA_ADDRESS} "
             f"(exit {result.returncode}): {result.stderr.strip()[:200]}"
+        )
+    token, metadata = answers
+    if token == "200" or metadata == "200":
+        reached = "a session token" if token == "200" else "metadata without a token"
+        raise SupervisorError(
+            f"a container can read {reached} from the instance metadata service at {METADATA_ADDRESS}; "
+            "require IMDSv2 with hop limit 1 on the instance, or pass --allow-metadata-reachable on a host that "
+            "is not an EC2 instance"
         )
 
 
