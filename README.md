@@ -809,6 +809,97 @@ hosted runners on purpose; if it is killed rather than stopped, the next start
 removes the registrations and containers it left. Run one supervisor per
 prefix and group.
 
+## Starting the runner's server on demand, and stopping it when idle
+
+The runner's server is an EC2 instance that is stopped unless CI needs it. Two parts keep it that way, both in
+`supervisor/`.
+
+### The starter: a Lambda function behind a webhook
+
+`supervisor/starter/handler.py` is an AWS Lambda function (Python 3.12, standard library plus the boto3 Lambda
+provides) behind a function URL. A GitHub organisation webhook for `workflow_job` events calls it. It:
+
+- checks GitHub's `X-Hub-Signature-256` HMAC against the webhook's secret, comparing in constant time, and
+  answers `401` when it is wrong or missing, doing nothing else;
+- answers `200` to a `ping`, and to every other event, action or job it does not act on;
+- for a `queued` job whose labels include every label in `RUNNER_LABELS` (default `self-hosted,pf`), asks EC2
+  for the instance's state and calls `ec2:StartInstances` only when it is `stopped`. A running or pending
+  instance is left alone, so a burst of queued jobs starts it once;
+- answers `500` when AWS refuses or fails, so GitHub shows the delivery as failed and it can be redelivered.
+
+A job that queues while the instance is `stopping` (the minute after an idle stop) finds nothing to start, and
+waits until the next job queues or its delivery is redelivered from GitHub's webhook page.
+
+`supervisor/starter/iam-policy.json` is the function's role policy: `ec2:StartInstances` on that one instance's
+ARN, `ec2:DescribeInstances` (EC2 cannot scope it to a resource) and writing logs to the function's own log
+group. `trust-policy.json` lets `lambda.amazonaws.com` assume the role. A call to start any other instance with
+that role is refused.
+
+**Set it up** (the account's owner, with an administrator profile):
+
+```sh
+umask 077 && openssl rand -hex 32 >webhook-secret   # keep it; the webhook needs the same value
+supervisor/starter/create-starter.sh --instance-id i-... --region eu-west-1 \
+  --secret-file webhook-secret --profile YOUR-ADMIN-PROFILE
+```
+
+It creates, saying what and its cost as it goes: the role `pf-runner-starter-role` with the policy above; the
+log group `/aws/lambda/pf-runner-starter`, kept 14 days; the function `pf-runner-starter` (arm64, 128 MB, 10
+seconds) with the secret, instance id and labels as environment variables; and a function URL with auth type
+`NONE`, because GitHub cannot sign AWS requests and the function verifies GitHub's signature instead. It prints
+the URL. Running it again updates the function and its settings instead of duplicating anything; `--function-name`
+and `--labels` change the defaults. The secret is read from the file and sent to AWS from a private temporary
+file; it is never printed.
+
+**Cost**: Lambda's free tier covers 1 million calls and 400,000 GB-seconds a month, and this function runs for a
+fraction of a second a few times a day, so it is $0. The role, the function URL and the log group (5 GB of
+ingestion free) cost nothing at this volume. What costs money is the instance while it runs and its disk while it
+is stopped.
+
+**The webhook**, in GitHub under the organisation's Settings, Webhooks, Add webhook:
+
+- Payload URL: the URL the script printed.
+- Content type: `application/json`.
+- Secret: the contents of the secret file.
+- Events: *Let me select individual events*, then only *Workflow jobs*.
+- Active: on. GitHub sends a `ping`, which shows as a green tick under *Recent deliveries* when the signature and
+  URL are right.
+
+**Turning the starting off**: untick *Active* on the webhook (or delete it). No job then starts the instance; one
+that is stopped stays stopped, and CI jobs for the runner's labels queue until it is started by hand (`aws ec2
+start-instances`). Turning it back on starts it with the next queued job.
+
+### The idle stop: a root timer on the server
+
+The instance's shutdown behaviour is `stop`, so `shutdown -h now` on it stops the instance. The supervisor runs as
+`pf-runner`, in the `docker` group, and is not given the right to stop the host. Instead it records its activity
+in `/var/lib/productforge-runner/activity` (`--state-file`): `busy <epoch>`, refreshed every 10 seconds
+(`--activity-poll-seconds`) while GitHub reports its runner running a job, and `idle <epoch>` from the moment its
+last job ended or it started. A job the supervisor cannot ask GitHub about counts as busy.
+
+`supervisor/idle_stop.py`, run every minute by the root timer `productforge-runner-idle-stop.timer`, reads that
+file and runs `shutdown -h now` once the host has been idle for `--idle-stop-minutes` (default 15). It never stops
+the host while the file says `busy` and is fresh, so it never stops a host a job container is running on, and a
+job that ends restarts the quiet period. A `busy` record older than 5 minutes (a supervisor that died) counts as
+idle from its last refresh; with no readable file the host's boot time stands in for the last activity. `0`
+disables the stop. The only things `pf-runner` can influence are that file's two words and its number, not
+anything the root timer runs.
+
+Install it with the supervisor, as root:
+
+```sh
+install -m 0644 supervisor/idle_stop.py /opt/productforge-runner/
+install -m 0644 supervisor/productforge-runner-idle-stop.service supervisor/productforge-runner-idle-stop.timer /etc/systemd/system/
+systemctl daemon-reload && systemctl enable --now productforge-runner-idle-stop.timer
+```
+
+Change the quiet period by editing `--idle-stop-minutes` in `productforge-runner-idle-stop.service` and running
+`systemctl daemon-reload`; to turn the idle stop off, set it to `0`, or `systemctl disable --now
+productforge-runner-idle-stop.timer`. The supervisor's unit already enables itself at boot, so it starts with
+the instance. The first job after a stop waits one to two minutes for the start; one while it is up starts within
+seconds. The journal (`journalctl -u productforge-runner-idle-stop`) says when it stopped the host and after how
+long.
+
 ## Developing this repository
 
 `make install`, `make lint`, `make test` — the same three targets every

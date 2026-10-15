@@ -6,9 +6,13 @@ Requires=docker.service
 
 [Service]
 User=pf-runner
+# Writable by pf-runner and readable by the root idle-stop timer; the supervisor records its activity here.
+StateDirectory=productforge-runner
+StateDirectoryMode=0755
 ExecStart=/usr/bin/python3 /opt/productforge-runner/runner_supervisor.py run \
   --org YOUR-ORG --group YOUR-RUNNER-GROUP --labels pf \
-  --token-file /etc/productforge-runner/token
+  --token-file /etc/productforge-runner/token \
+  --state-file /var/lib/productforge-runner/activity
 Restart=always
 RestartSec=10
 # The supervisor itself gains no privilege, sees a private /tmp and writes only the Docker client's own

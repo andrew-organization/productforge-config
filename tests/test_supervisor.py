@@ -74,6 +74,8 @@ class Endpoint:
     bodies: list[dict[str, Any]] = field(default_factory=list)
     tokens: set[str] = field(default_factory=set)
     next_id: int = 100
+    busy: bool = False  # what GET of one runner answers for its `busy`
+    busy_get_status: int = 200  # what GET of one runner answers with; GitHub failing is not a job's end
     busy_deletes: int = 0  # the next this many DELETEs answer 422, as GitHub does for a runner still busy
 
     @property
@@ -109,6 +111,12 @@ def endpoint() -> Iterator[Endpoint]:
                 state.next_id += 1
                 state.runners[state.next_id] = body["name"]
                 self.reply(201, {"runner": {"id": state.next_id, "name": body["name"]}, "encoded_jit_config": "JIT"})
+            elif method == "GET" and path.startswith("/orgs/acme/actions/runners/"):
+                runner_id = int(path.rsplit("/", 1)[1])
+                if state.busy_get_status != 200:
+                    self.reply(state.busy_get_status, {"message": "unavailable"})
+                else:
+                    self.reply(200, {"id": runner_id, "name": state.runners[runner_id], "busy": state.busy})
             elif method == "DELETE" and path.startswith("/orgs/acme/actions/runners/"):
                 runner_id = int(path.rsplit("/", 1)[1])
                 if state.busy_deletes and runner_id in state.runners:
@@ -574,3 +582,43 @@ def test_the_image_verifies_what_it_downloads_with_pinned_build_args(shipped: Pa
     assert 'echo "${TAPLO_SHA256}  /tmp/taplo.gz" | sha256sum --check -' in dockerfile
     assert '[ "$(git -C "${FLUTTER_HOME}" rev-parse HEAD)" = "${FLUTTER_COMMIT}" ]' in dockerfile
     assert "${DOCKER_KEY_FINGERPRINT}" in dockerfile and "${GITHUB_CLI_KEY_FINGERPRINTS}" in dockerfile
+
+
+def test_the_state_file_reads_busy_while_a_job_runs_and_idle_once_it_ends(host: Host, endpoint: Endpoint) -> None:
+    state_file = host.root / "activity"
+    endpoint.busy = True
+    host.outcomes("hang")
+    process = host.start("--state-file", str(state_file), "--activity-poll-seconds", "0.05")
+    host.wait_for(lambda: state_file.exists() and state_file.read_text().startswith("busy "))
+    assert re.fullmatch(r"busy \d+\n", state_file.read_text())
+    process.send_signal(signal.SIGTERM)
+    process.communicate(timeout=30)
+    assert re.fullmatch(r"idle \d+\n", state_file.read_text())
+
+
+def test_a_runner_that_waits_without_a_job_is_idle_and_a_finished_job_leaves_it_idle(
+    host: Host, endpoint: Endpoint
+) -> None:
+    state_file = host.root / "activity"
+    host.outcomes("pass")
+    process = host.start("--max-jobs", "1", "--state-file", str(state_file))
+    process.communicate(timeout=30)
+    assert process.returncode == 0
+    assert re.fullmatch(r"idle \d+\n", state_file.read_text())
+
+
+def test_a_failing_busy_check_counts_as_busy(host: Host, endpoint: Endpoint) -> None:
+    state_file = host.root / "activity"
+    endpoint.busy_get_status = 500
+    host.outcomes("hang")
+    process = host.start("--state-file", str(state_file), "--activity-poll-seconds", "0.05")
+    host.wait_for(lambda: state_file.exists() and state_file.read_text().startswith("busy "))
+    process.send_signal(signal.SIGTERM)
+    process.communicate(timeout=30)
+
+
+def test_without_a_state_file_nothing_is_recorded_or_polled(host: Host, endpoint: Endpoint) -> None:
+    host.outcomes("pass")
+    host.start("--max-jobs", "1").communicate(timeout=30)
+    assert not [c for c in endpoint.calls if c.startswith("GET /orgs/acme/actions/runners/")]
+    assert not (host.root / "activity").exists()

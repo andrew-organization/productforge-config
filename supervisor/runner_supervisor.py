@@ -19,6 +19,10 @@ process and a memory limit, and, checked once at start, no route to the EC2 inst
 Under a Sysbox runtime (`--runtime sysbox-runc`) the container instead runs in a user namespace, which
 confines it, and keeps its namespaced capabilities so the Docker engine inside it can start; the process and
 memory limits and the metadata check stay.
+
+With `--state-file` the supervisor records whether a job is running (`busy <epoch>`) or the moment the last
+one ended (`idle <epoch>`), for `idle_stop.py`, a separate root-owned timer that stops an EC2 instance that
+has been idle for a while. The supervisor never gets the right to stop the host itself.
 """
 
 import argparse
@@ -49,6 +53,7 @@ DEFAULT_PREFIX = "pf"
 LABEL = "productforge.runner-supervisor"
 PAGE_SIZE = 100
 POLL_SECONDS = 1.0
+DEFAULT_ACTIVITY_POLL_SECONDS = 10.0
 
 
 class SupervisorError(Exception):
@@ -66,6 +71,7 @@ class SupervisorError(Exception):
 class Settings:
     """What one supervisor run is configured with."""
 
+    activity_poll_seconds: float
     api_url: str
     docker: str
     group: str
@@ -79,6 +85,7 @@ class Settings:
     prefix: str
     retry_seconds: float
     runtime: str | None
+    state_file: str | None
     token_file: str | None
 
 
@@ -159,6 +166,31 @@ def group_runners(*, group_id: int, settings: Settings) -> list[dict[str, Any]]:
     """The runners registered in the group."""
     path = f"/orgs/{settings.org}/actions/runner-groups/{group_id}/runners"
     return pages(key="runners", path=path, settings=settings)
+
+
+def record_activity(*, state: str, settings: Settings) -> None:
+    """Writes `busy <epoch>` or `idle <epoch>` to the state file, atomically; a no-op without `--state-file`.
+
+    A failed write is logged and never stops the supervisor: the idle stop then errs towards keeping the host up.
+    """
+    if not settings.state_file:
+        return
+    target = Path(settings.state_file)
+    temporary = target.with_name(f"{target.name}.tmp")
+    try:
+        temporary.write_text(f"{state} {int(time.time())}\n")
+        temporary.replace(target)
+    except OSError as error:
+        log(message=f"cannot record the activity in {target}: {error.strerror}")
+
+
+def runner_busy(*, runner_id: int, settings: Settings) -> bool:
+    """Whether GitHub says the runner is running a job; a failed call counts as busy, never a guess to stop on."""
+    try:
+        runner = api(method="GET", path=f"/orgs/{settings.org}/actions/runners/{runner_id}", settings=settings)
+    except SupervisorError:
+        return True
+    return bool(runner and runner.get("busy"))
 
 
 def pause(*, seconds: float, stop: Stop) -> None:
@@ -339,7 +371,12 @@ def run_one(*, group_id: int, settings: Settings, stop: Stop) -> bool:
             )
         except OSError as error:
             raise SupervisorError(f"cannot start {settings.docker}: {error.strerror}") from error
+        next_poll = 0.0
         while status is None and not stop.requested:
+            if settings.state_file and time.monotonic() >= next_poll:
+                busy = runner_busy(runner_id=runner_id, settings=settings)
+                record_activity(state="busy" if busy else "idle", settings=settings)
+                next_poll = time.monotonic() + settings.activity_poll_seconds
             try:
                 status = container.wait(timeout=POLL_SECONDS)
             except subprocess.TimeoutExpired:
@@ -353,6 +390,7 @@ def run_one(*, group_id: int, settings: Settings, stop: Stop) -> bool:
         if container is not None:
             container.wait()
         removed = delete_runner(runner_id=runner_id, settings=settings)
+        record_activity(state="idle", settings=settings)
         log(message=f"removed {'runner and ' if removed else ''}container {name}")
     return status == 0
 
@@ -364,6 +402,7 @@ def supervise(*, settings: Settings, stop: Stop) -> None:
         return
     check_metadata_unreachable(settings=settings)
     sweep(group_id=group_id, settings=settings)
+    record_activity(state="idle", settings=settings)
     runs = 0
     while not stop.requested and (settings.max_jobs == 0 or runs < settings.max_jobs):
         if not wait_for_docker(settings=settings, stop=stop):
@@ -397,6 +436,12 @@ def parse(*, argv: list[str]) -> tuple[str, Settings]:
     """Reads the command line into the command and its settings."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("command", choices=("run", "status"), help="run the supervisor, or print its state")
+    parser.add_argument(
+        "--activity-poll-seconds",
+        type=float,
+        default=DEFAULT_ACTIVITY_POLL_SECONDS,
+        help="how often to ask GitHub whether the runner is busy, with --state-file (default: %(default)s)",
+    )
     parser.add_argument("--api-url", default=os.environ.get("GITHUB_API_URL", DEFAULT_API_URL))
     parser.add_argument("--docker", default="docker", help="the container runtime's command")
     parser.add_argument("--group", required=True, help="name of the runner group to register in")
@@ -422,10 +467,15 @@ def parse(*, argv: list[str]) -> tuple[str, Settings]:
         "--runtime",
         help="the container runtime to start each container with, such as sysbox-runc (default: Docker's own)",
     )
+    parser.add_argument(
+        "--state-file",
+        help="file to record `busy <epoch>` or `idle <epoch>` in, for idle_stop.py (default: not recorded)",
+    )
     parser.add_argument("--token-file", help="file holding the token (default: $PF_RUNNER_TOKEN)")
     args = parser.parse_args(argv)
     labels = tuple(label for label in args.labels.split(",") if label)
     return args.command, Settings(
+        activity_poll_seconds=args.activity_poll_seconds,
         api_url=args.api_url.rstrip("/"),
         docker=args.docker,
         group=args.group,
@@ -439,6 +489,7 @@ def parse(*, argv: list[str]) -> tuple[str, Settings]:
         prefix=args.prefix,
         retry_seconds=args.retry_seconds,
         runtime=args.runtime or None,
+        state_file=args.state_file,
         token_file=args.token_file,
     )
 
