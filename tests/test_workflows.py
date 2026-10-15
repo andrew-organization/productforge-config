@@ -1,6 +1,10 @@
 """The reusable CI workflows, ci-api.yml and ci-web.yml, against the kits they run."""
 
+import json
+import os
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 import yaml
@@ -94,3 +98,71 @@ def test_every_reusable_job_reads_the_runner_from_the_organisation_variable_and_
         assert jobs and all(job["runs-on"] == RUNS_ON for job in jobs.values()), name
     own = yaml.safe_load((workflows / "ci.yml").read_text())["jobs"]
     assert all(job["runs-on"] == "ubuntu-latest" for job in own.values())  # public: hosted minutes are free
+
+
+def flutter_lookup(shipped: Path) -> tuple[str, str]:
+    """The setup action's Flutter lookup: its script, and the `if` that guards flutter-action."""
+    steps_ = yaml.safe_load((shipped / "actions" / "setup" / "action.yml").read_text())["runs"]["steps"]
+    lookup = next(s for s in steps_ if s.get("id") == "flutter")
+    setup = next(s for s in steps_ if s.get("uses", "").startswith("subosito/flutter-action@"))
+    script = lookup["run"].split("<<'PY'\n", 1)[1].rsplit("PY", 1)[0]
+    return script, setup["if"]
+
+
+def run_lookup(shipped: Path, tmp_path: Path, wanted: str | None, reports: str | None, fvmrc: str | None = None) -> str:
+    """What the lookup writes for a repository pinning `wanted` (or with `fvmrc` as .fvmrc), given `flutter` on PATH."""
+    script, _ = flutter_lookup(shipped)
+    if fvmrc is not None:
+        (tmp_path / ".fvmrc").write_text(fvmrc)
+    elif wanted is not None:
+        (tmp_path / ".fvmrc").write_text(json.dumps({"flutter": wanted}))
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    if reports is not None:
+        stub = bin_dir / "flutter"
+        stub.write_text(
+            f"#!/bin/sh\necho 'Flutter is checking something'\necho '{{\"frameworkVersion\": \"{reports}\"}}'\n"
+        )
+        stub.chmod(0o755)
+    path = f"{bin_dir}{os.pathsep}/usr/bin{os.pathsep}/bin"
+    done = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=tmp_path, env={"PATH": path}, capture_output=True, text=True, check=True,
+    )  # fmt: skip
+    return done.stdout.strip()
+
+
+def test_the_setup_skips_flutter_action_only_when_the_flutter_on_path_is_the_one_fvmrc_pins(
+    shipped: Path, tmp_path: Path
+) -> None:
+    _, condition = flutter_lookup(shipped)
+    assert condition == "inputs.flutter == 'true' && steps.flutter.outputs.preinstalled != 'true'"
+    cases = {
+        "the same version": ("3.44.7", "3.44.7"),
+        "another version": ("3.44.7", "3.29.0"),
+        "no flutter": ("3.44.7", None),
+    }
+    outcomes = {}
+    for name, (wanted, reports) in cases.items():
+        case = tmp_path / name.replace(" ", "-")
+        case.mkdir()
+        outcomes[name] = run_lookup(shipped, case, wanted, reports)
+    assert outcomes == {
+        "the same version": "preinstalled=true",
+        "another version": "preinstalled=false",
+        "no flutter": "preinstalled=false",
+    }
+
+
+def test_the_setup_reports_not_preinstalled_when_fvmrc_is_missing_or_names_no_flutter(
+    shipped: Path, tmp_path: Path
+) -> None:
+    cases = {
+        "no fvmrc": {"wanted": None},
+        "no flutter key": {"wanted": None, "fvmrc": json.dumps({"flavors": {}})},
+        "not json": {"wanted": None, "fvmrc": "not json"},
+    }
+    for name, kwargs in cases.items():
+        case = tmp_path / name.replace(" ", "-")
+        case.mkdir()
+        assert run_lookup(shipped, case, reports="3.44.7", **kwargs) == "preinstalled=false", name

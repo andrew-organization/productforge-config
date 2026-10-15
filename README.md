@@ -645,8 +645,8 @@ one. An idle runner holds no job and no data.
   `--allow-metadata-reachable` to skip the check, only for a local test on a
   machine that is not an EC2 instance.
 - The runner image, pinned by digest: the default `--image` is
-  `ghcr.io/actions/actions-runner@sha256:9644537b29b4799cb752a2f23a45a1e603cf74c3c5998241a1533f0e8c3dc649`,
-  the arm64 build of `:latest` on 2026-10-15, pulled on first use. A digest does
+  `ghcr.io/actions/actions-runner@sha256:9644537b29b4799cb752a2f23a45a1e603cf74c3c5998241a1533f0e8c3dc649`
+  (the base of the runner image below), the arm64 build of `:latest` on 2026-10-15, pulled on first use. A digest does
   not move under the host, so a changed runner is a decision. To move it: read
   the new digest with
   `docker buildx imagetools inspect ghcr.io/actions/actions-runner:latest`
@@ -688,6 +688,86 @@ What the options take away from a job is `sudo`: a step that runs `sudo` (for
 example `sudo apt-get install`) fails, so install tools without it or bake them
 into a job's own container image. A job that needs more memory or processes
 raises the two limits in the unit's `ExecStart`.
+
+With `--runtime sysbox-runc` (the runner image below) the container starts under
+[Sysbox](https://github.com/nestybox/sysbox) instead, and `--cap-drop ALL` and
+`no-new-privileges` are not passed. Sysbox runs the container in a Linux user
+namespace, so its root and its capabilities are an unprivileged user's on the
+host, which is what confines it: the Docker engine inside needs those
+namespaced capabilities to start, and a job's `sudo` works inside the container
+and nowhere else. The process and memory limits stay, and so does the metadata
+check, which runs under the same runtime and still refuses to start on a 200.
+Any other `--runtime` keeps the capability drop and `no-new-privileges`.
+
+### The runner image and Sysbox
+
+`supervisor/runner-image/` builds the image a job runs in: the official runner
+image, pinned by the digest above, plus the tools the kits' CI uses (`make`,
+Python 3 with `venv` and `pip`, `build-essential`, `git`, `curl`, `unzip`,
+`xz-utils`, `zip`, `jq`, `gh`, and Docker's engine, Buildx and Compose plugin).
+Its entrypoint starts `dockerd` inside the container, as root, then runs the
+runner as the `runner` user, who is in the `docker` group. Under Sysbox that
+engine is the job's own: its images and containers live in the job's container
+and go with it, and it cannot reach the host's Docker. Moving the base digest means
+changing it in `DEFAULT_IMAGE` and in the Dockerfile's `BASE_IMAGE`; a test keeps
+the two equal.
+
+The image also carries Flutter, cloned from Flutter's git repository at
+`FLUTTER_VERSION` (a Dockerfile build argument) with its web artefacts
+fetched, because `flutter-action` finds no Linux arm64 SDK in Flutter's release
+manifest. **The image's Flutter must equal the version in the repositories'
+`.fvmrc`**, which is `settings/fvmrc` in this repository; a test keeps the
+Dockerfile's `FLUTTER_VERSION` equal to it. `actions/setup` with `flutter: true`
+skips `flutter-action` when the `flutter` on `PATH` already reports the version
+`.fvmrc` pins, and otherwise sets Flutter up as before, so hosted runners are
+unchanged. When `settings/fvmrc` moves, change `FLUTTER_VERSION` in the same
+release and rebuild the image as below; until it is rebuilt, a job on the runner
+finds a different Flutter, falls back to `flutter-action`, and fails on arm64.
+
+**What a rebuild reproduces.** The same pinned base image (`BASE_IMAGE`), the same
+Flutter commit (`FLUTTER_COMMIT`, checked against the clone), the same taplo
+binary (`TAPLO_SHA256`) and the same Docker and GitHub CLI apt signing keys
+(checked against their published fingerprints); the build fails if any differs.
+The apt packages are not pinned: a rebuild installs their versions at the time
+it runs. Changing `FLUTTER_VERSION` or `TAPLO_VERSION` means changing
+`FLUTTER_COMMIT` or `TAPLO_SHA256` with it.
+
+On the host, install Sysbox CE from its release (Ubuntu 24.04, arm64 shown;
+check the
+[releases](https://github.com/nestybox/sysbox/releases) for the newest):
+
+```sh
+curl -fsSLO https://github.com/nestybox/sysbox/releases/download/v0.7.1/sysbox-ce_0.7.1.linux_arm64.deb
+systemctl stop productforge-runner-supervisor   # the installer restarts Docker
+apt-get install -y ./sysbox-ce_0.7.1.linux_arm64.deb
+docker info | grep -i runtimes                  # lists sysbox-runc
+```
+
+**Build and update the image.** Run it from the release you are moving to,
+on the host, whenever the runner version GitHub accepts moves (a new digest
+in `DEFAULT_IMAGE`, see above) or a tool needs updating (the build installs
+the packages' current versions):
+
+```sh
+VERSION=v2.8.0   # a productforge-config release tag
+curl -fsSL https://codeload.github.com/andrew-organization/productforge-config/tar.gz/refs/tags/$VERSION |
+  tar -xz --strip-components=3 --one-top-level=/tmp/runner-image-$VERSION \
+    productforge-config-${VERSION#v}/supervisor/runner-image
+/tmp/runner-image-$VERSION/build.sh $VERSION    # tags productforge-runner:$VERSION
+```
+
+Then point the unit at it and restart, keeping its other options:
+
+```sh
+# in ExecStart: --image productforge-runner:v2.8.0 --runtime sysbox-runc
+systemctl daemon-reload && systemctl restart productforge-runner-supervisor
+journalctl -u productforge-runner-supervisor -n 20   # the metadata check passed; a runner registered
+```
+
+The image is built on the host, never pulled: a `--image` with no registry is a
+local tag. Remove the previous tag when the new one runs
+(`docker image rm productforge-runner:OLD`). Keep the server's CPU credits on
+`standard`, so it never bills for bursting.
 
 ### Install as a service
 

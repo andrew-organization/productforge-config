@@ -16,6 +16,9 @@ and containers a previous run left under its prefix, so one supervisor per prefi
 
 A job can run anything, so its container is confined: every capability dropped, no privilege gained, a
 process and a memory limit, and, checked once at start, no route to the EC2 instance metadata service.
+Under a Sysbox runtime (`--runtime sysbox-runc`) the container instead runs in a user namespace, which
+confines it, and keeps its namespaced capabilities so the Docker engine inside it can start; the process and
+memory limits and the metadata check stay.
 """
 
 import argparse
@@ -75,6 +78,7 @@ class Settings:
     pids_limit: int
     prefix: str
     retry_seconds: float
+    runtime: str | None
     token_file: str | None
 
 
@@ -216,18 +220,22 @@ def wait_for_docker(*, settings: Settings, stop: Stop) -> bool:
     return False
 
 
+def uses_sysbox(*, settings: Settings) -> bool:
+    """Whether containers run under a Sysbox runtime (`sysbox-runc`)."""
+    return bool(settings.runtime) and settings.runtime.startswith("sysbox")
+
+
 def hardening(*, settings: Settings) -> list[str]:
-    """The `docker run` options that confine a container."""
-    return [
-        "--cap-drop",
-        "ALL",
-        "--security-opt",
-        "no-new-privileges",
-        "--pids-limit",
-        str(settings.pids_limit),
-        "--memory",
-        settings.memory,
-    ]
+    """The `docker run` options that confine a container: its runtime, its capabilities and its limits.
+
+    Under Sysbox the container's root is an unprivileged user of the host (a user namespace) and the Docker
+    engine inside needs the capabilities it has there, so `--cap-drop ALL` and `no-new-privileges` are not
+    passed: the engine would not start. Under any other runtime, or none, both are.
+    """
+    options = ["--runtime", settings.runtime] if settings.runtime else []
+    if not uses_sysbox(settings=settings):
+        options += ["--cap-drop", "ALL", "--security-opt", "no-new-privileges"]
+    return [*options, "--pids-limit", str(settings.pids_limit), "--memory", settings.memory]
 
 
 def check_metadata_unreachable(*, settings: Settings) -> None:
@@ -410,6 +418,10 @@ def parse(*, argv: list[str]) -> tuple[str, Settings]:
     )
     parser.add_argument("--prefix", default=DEFAULT_PREFIX, help="runner names start with this and a dash")
     parser.add_argument("--retry-seconds", type=float, default=5.0, help="wait after a failed job or call")
+    parser.add_argument(
+        "--runtime",
+        help="the container runtime to start each container with, such as sysbox-runc (default: Docker's own)",
+    )
     parser.add_argument("--token-file", help="file holding the token (default: $PF_RUNNER_TOKEN)")
     args = parser.parse_args(argv)
     labels = tuple(label for label in args.labels.split(",") if label)
@@ -426,6 +438,7 @@ def parse(*, argv: list[str]) -> tuple[str, Settings]:
         pids_limit=args.pids_limit,
         prefix=args.prefix,
         retry_seconds=args.retry_seconds,
+        runtime=args.runtime or None,
         token_file=args.token_file,
     )
 

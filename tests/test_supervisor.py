@@ -8,11 +8,13 @@ outcome a case scripted for each container: `pass`, `fail` or `hang` (a job that
 import http.server
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
 import threading
 import time
+import zipfile
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -294,6 +296,131 @@ def test_the_default_limits_and_a_pinned_image_digest(host: Host) -> None:
     assert " ghcr.io/actions/actions-runner@sha256:" in run and ":latest" not in run
 
 
+def test_without_a_runtime_option_no_runtime_is_passed(host: Host) -> None:
+    host.outcomes("pass")
+    host.start("--max-jobs", "1").communicate(timeout=30)
+    (run,) = host.job_runs
+    assert "--runtime" not in run
+
+
+def test_a_sysbox_runtime_starts_the_job_and_the_check_under_it_without_the_capability_drop(host: Host) -> None:
+    host.outcomes("pass")
+    host.start("--max-jobs", "1", "--runtime", "sysbox-runc", "--pids-limit", "99", "--memory", "2g").communicate(
+        timeout=30
+    )
+    (run,) = host.job_runs
+    check = next(c for c in host.docker_calls if " curl " in c)
+    for call in (run, check):
+        assert "--runtime sysbox-runc" in call
+        assert "--cap-drop" not in call and "no-new-privileges" not in call
+        assert "--pids-limit 99" in call and "--memory 2g" in call
+
+
+def test_another_runtime_keeps_the_capability_drop_and_no_new_privileges(host: Host) -> None:
+    host.outcomes("pass")
+    host.start("--max-jobs", "1", "--runtime", "runsc").communicate(timeout=30)
+    (run,) = host.job_runs
+    assert "--runtime runsc" in run
+    assert "--cap-drop ALL" in run and "--security-opt no-new-privileges" in run
+
+
+@pytest.mark.parametrize("answer", ["200 401", "000 200"])
+def test_start_still_refuses_under_sysbox_when_metadata_is_readable(
+    host: Host, endpoint: Endpoint, answer: str
+) -> None:
+    (host.root / "metadata").write_text(answer)
+    process = host.start("--max-jobs", "1", "--runtime", "sysbox-runc")
+    _, err = process.communicate(timeout=30)
+    assert process.returncode == 1 and "instance metadata service" in err
+    assert endpoint.bodies == [] and host.job_runs == []
+
+
+def test_a_sysbox_start_passes_when_a_token_request_fails_and_a_request_without_one_answers_401(
+    host: Host, endpoint: Endpoint
+) -> None:
+    (host.root / "metadata").write_text("000 401")
+    host.outcomes("pass")
+    process = host.start("--max-jobs", "1", "--runtime", "sysbox-runc")
+    process.communicate(timeout=30)
+    assert process.returncode == 0 and len(host.job_runs) == 1
+
+
+RUNNER_IMAGE = Path("supervisor") / "runner-image"
+
+
+def test_the_image_is_built_from_the_digest_the_supervisor_runs_by_default(shipped: Path) -> None:
+    supervisor = (shipped / "supervisor" / "runner_supervisor.py").read_text()
+    default = next(line for line in supervisor.splitlines() if line.startswith("DEFAULT_IMAGE = ")).split('"')[1]
+    dockerfile = (shipped / RUNNER_IMAGE / "Dockerfile").read_text()
+    assert f"ARG BASE_IMAGE={default}" in dockerfile
+    assert "FROM ${BASE_IMAGE}" in dockerfile
+
+
+@pytest.mark.parametrize(
+    "tool",
+    ["make", "python3", "python3-venv", "build-essential", "git", "curl", "unzip", "xz-utils", "zip", "jq", "gh"]
+    + ["docker-ce", "docker-compose-plugin"],
+)
+def test_the_image_installs_the_tools_the_kits_use(shipped: Path, tool: str) -> None:
+    dockerfile = (shipped / RUNNER_IMAGE / "Dockerfile").read_text()
+    installed = {
+        word
+        for block in re.findall(r"apt-get install\b(.*?)(?:&&|$)", dockerfile.replace("\\\n", " "), flags=re.S)
+        for word in block.split()
+        if not word.startswith("-")
+    }
+    assert tool in installed
+
+
+def test_the_entrypoint_starts_the_engine_then_hands_the_runner_to_the_runner_user(shipped: Path) -> None:
+    entrypoint = shipped / RUNNER_IMAGE / "entrypoint.sh"
+    text = entrypoint.read_text()
+    assert os.access(entrypoint, os.X_OK)
+    commands = [line.strip() for line in text.splitlines() if line.strip() and not line.strip().startswith("#")]
+    assert commands[-1] == 'HOME=/home/runner exec runuser --user runner -- "$@"'
+    (engine,) = (line for line in commands if "dockerd" in line and "--host" in line)
+    assert engine.startswith("env -u ACTIONS_RUNNER_INPUT_JITCONFIG dockerd ")
+    assert text.index("dockerd") < text.index("runuser --user runner")
+    assert "usermod --append --groups docker runner" in (shipped / RUNNER_IMAGE / "Dockerfile").read_text()
+    assert 'ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]' in (shipped / RUNNER_IMAGE / "Dockerfile").read_text()
+
+
+def test_the_image_carries_an_arm64_taplo_wheel_for_the_hook_that_pins_it(shipped: Path, tmp_path: Path) -> None:
+    dockerfile = (shipped / RUNNER_IMAGE / "Dockerfile").read_text()
+    assert "ENV PIP_FIND_LINKS=/opt/wheels" in dockerfile and "taplo-linux-aarch64.gz" in dockerfile
+    version = next(line for line in dockerfile.splitlines() if line.startswith("ARG TAPLO_VERSION=")).split("=")[1]
+    assert f'additional_dependencies: ["taplo=={version}"]' in (shipped / ".pre-commit-hooks.yaml").read_text()
+    binary = tmp_path / "taplo"
+    binary.write_bytes(b"binary")
+    script = shipped / RUNNER_IMAGE / "taplo_wheel.py"
+    done = subprocess.run(
+        [sys.executable, str(script), version, str(binary), str(tmp_path / "wheels")],
+        capture_output=True, text=True, check=False,
+    )  # fmt: skip
+    assert done.returncode == 0, done.stderr
+    (wheel,) = (tmp_path / "wheels").glob("*.whl")
+    assert wheel.name == f"taplo-{version}-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl"
+    with zipfile.ZipFile(wheel) as archive:
+        assert archive.read(f"taplo-{version}.data/scripts/taplo") == b"binary"
+        assert (archive.getinfo(f"taplo-{version}.data/scripts/taplo").external_attr >> 16) & 0o111
+
+
+def test_the_build_command_tags_the_image_with_the_release(host: Host, shipped: Path) -> None:
+    build = shipped / RUNNER_IMAGE / "build.sh"
+    done = subprocess.run(
+        [str(build), "v9.9.9"], env={**os.environ, "PATH": f"{host.root}:{os.environ['PATH']}"},
+        capture_output=True, text=True, check=False,
+    )  # fmt: skip
+    assert done.returncode == 0, done.stderr
+    (call,) = (c for c in host.docker_calls if c.startswith("build "))
+    assert "--tag productforge-runner:v9.9.9" in call and call.endswith(str(build.parent))
+
+
+def test_the_build_command_refuses_without_a_version(shipped: Path) -> None:
+    done = subprocess.run([str(shipped / RUNNER_IMAGE / "build.sh")], capture_output=True, text=True, check=False)
+    assert done.returncode == 2 and "usage" in done.stderr
+
+
 def test_start_refuses_when_a_container_can_get_a_metadata_token(host: Host, endpoint: Endpoint) -> None:
     (host.root / "metadata").write_text("200 401")
     process = host.start("--max-jobs", "1")
@@ -428,3 +555,22 @@ def test_docker_going_down_after_a_job_stops_new_registrations(host: Host, endpo
     assert len(endpoint.bodies) == 1  # no registration per retry while it is down
     process.send_signal(signal.SIGTERM)
     process.communicate(timeout=30)
+
+
+def test_the_image_carries_the_flutter_the_repositories_pin(shipped: Path) -> None:
+    dockerfile = (shipped / RUNNER_IMAGE / "Dockerfile").read_text()
+    version = next(line for line in dockerfile.splitlines() if line.startswith("ARG FLUTTER_VERSION=")).split("=")[1]
+    assert version == json.loads((shipped / "settings" / "fvmrc").read_text())["flutter"]
+    assert "git clone https://github.com/flutter/flutter.git --branch" in dockerfile and "precache --web" in dockerfile
+
+
+def test_the_image_verifies_what_it_downloads_with_pinned_build_args(shipped: Path) -> None:
+    dockerfile = (shipped / RUNNER_IMAGE / "Dockerfile").read_text()
+    args = dict(re.findall(r'^ARG (\w+)="?([^"\n]*)"?$', dockerfile, flags=re.M))
+    assert re.fullmatch(r"[0-9a-f]{64}", args["TAPLO_SHA256"])
+    assert re.fullmatch(r"[0-9a-f]{40}", args["FLUTTER_COMMIT"])
+    assert re.fullmatch(r"[0-9A-F]{40}", args["DOCKER_KEY_FINGERPRINT"])
+    assert all(re.fullmatch(r"[0-9A-F]{40}", f) for f in args["GITHUB_CLI_KEY_FINGERPRINTS"].split())
+    assert 'echo "${TAPLO_SHA256}  /tmp/taplo.gz" | sha256sum --check -' in dockerfile
+    assert '[ "$(git -C "${FLUTTER_HOME}" rev-parse HEAD)" = "${FLUTTER_COMMIT}" ]' in dockerfile
+    assert "${DOCKER_KEY_FINGERPRINT}" in dockerfile and "${GITHUB_CLI_KEY_FINGERPRINTS}" in dockerfile

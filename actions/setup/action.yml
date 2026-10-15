@@ -26,8 +26,32 @@ runs:
         print("version=" + tomllib.load(open(sys.argv[1], "rb"))["python"]["version"])
         PY
 
-    - name: Set up Flutter
+    # A runner image can carry Flutter itself (the self-hosted runner's, on Linux arm64, where flutter-action finds no
+    # SDK); when the `flutter` on PATH already reports the version .fvmrc pins, nothing is downloaded. Anything else,
+    # including every GitHub-hosted runner, sets Flutter up as before.
+    - name: Look for the pinned Flutter on PATH
+      id: flutter
       if: inputs.flutter == 'true'
+      shell: bash
+      run: |
+        python3 - >> "$GITHUB_OUTPUT" <<'PY'
+        import json, subprocess
+        try:
+            wanted = json.load(open(".fvmrc"))["flutter"]
+        except (OSError, ValueError, KeyError):
+            print("preinstalled=false")
+            raise SystemExit
+        try:
+            command = ["flutter", "--version", "--machine"]
+            text = subprocess.run(command, capture_output=True, text=True, check=True).stdout
+            found = json.loads(text[text.index("{"):])["frameworkVersion"]
+        except (OSError, subprocess.CalledProcessError, ValueError, KeyError):
+            found = None
+        print("preinstalled=" + str(found == wanted).lower())
+        PY
+
+    - name: Set up Flutter
+      if: inputs.flutter == 'true' && steps.flutter.outputs.preinstalled != 'true'
       uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
       with:
         flutter-version-file: .fvmrc
