@@ -1,6 +1,5 @@
 [Unit]
 Description=ProductForge runner host idle stop
-After=productforge-runner-supervisor.service
 
 [Service]
 Type=oneshot

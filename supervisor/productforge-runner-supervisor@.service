@@ -1,18 +1,22 @@
 [Unit]
-Description=ProductForge ephemeral runner supervisor
+Description=ProductForge ephemeral runner supervisor, slot %i
 After=network-online.target docker.service
 Wants=network-online.target
 Requires=docker.service
 
+# One instance per slot (`@1`, `@2`, ...). Runners are named `pf<slot>-<random>`, so no slot's name prefix
+# (`pf1-`, `pf2-`, ... `pf10-`) starts another's, and none starts with the single-runner unit's `pf-`.
+
 [Service]
 User=pf-runner
-# Writable by pf-runner and readable by the root idle-stop timer; the supervisor records its activity here.
+# Writable by pf-runner and readable by the root idle-stop timer; each slot records its activity in its own file here.
 StateDirectory=productforge-runner
 StateDirectoryMode=0755
 ExecStart=/usr/bin/python3 /opt/productforge-runner/runner_supervisor.py run \
   --org YOUR-ORG --group YOUR-RUNNER-GROUP --labels pf \
+  --prefix pf%i --memory 4g --pids-limit 512 \
   --token-file /etc/productforge-runner/token \
-  --state-file /var/lib/productforge-runner/activity
+  --state-file /var/lib/productforge-runner/activity-%i
 Restart=always
 RestartSec=10
 # The supervisor itself gains no privilege, sees a private /tmp and writes only the Docker client's own
