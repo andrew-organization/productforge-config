@@ -2,6 +2,7 @@ import importlib.util
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 from types import ModuleType
 
@@ -100,6 +101,37 @@ def test_without_a_readable_state_the_boot_time_stands_in_for_the_last_activity(
     assert idle_stop.idle_seconds(state=None, now=NOW, booted=NOW - 5 * MINUTE) == 5 * MINUTE
 
 
+def test_a_state_file_left_by_a_previous_run_of_the_host_counts_from_the_boot(
+    idle_stop: ModuleType, state_file: Path, shutdowns: list[str], tmp_path: Path
+) -> None:
+    state_file.write_text(f"idle {int(NOW - 3 * 3600)}\n")  # written hours ago, before the host last booted
+    booted = NOW - 5 * MINUTE
+    assert (
+        idle_stop.check(idle_stop_minutes=15, now=NOW, shutdown=shutdowns, state_file=state_file, booted=booted)
+        is False
+    )
+    assert not stopped(tmp_path)
+    assert idle_stop.idle_seconds(state=("idle", NOW - 3 * 3600), now=NOW, booted=booted) == 5 * MINUTE
+    assert idle_stop.idle_seconds(state=("busy", NOW - 3 * 3600), now=NOW, booted=booted) == 5 * MINUTE
+    later = NOW + 11 * MINUTE  # the quiet period then passes from the boot
+    assert idle_stop.check(idle_stop_minutes=15, now=later, shutdown=shutdowns, state_file=state_file, booted=booted)
+    assert stopped(tmp_path)
+
+
+def test_a_job_that_becomes_busy_just_before_the_shutdown_keeps_the_host_up(
+    idle_stop: ModuleType,
+    state_file: Path,
+    shutdowns: list[str],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reads = iter([("idle", NOW - 20 * MINUTE), ("busy", NOW - 1)])  # the second read is the one before the shutdown
+    monkeypatch.setattr(idle_stop, "read_state", lambda *, path: next(reads))
+    assert run(idle_stop, state_file, shutdowns) is False
+    assert not stopped(tmp_path)
+
+
+@pytest.mark.skipif(not Path("/proc/uptime").exists(), reason="the idle stop reads the boot time from /proc/uptime")
 def test_the_command_runs_the_shutdown_command_it_is_given_once_the_host_is_idle(
     shipped: Path, state_file: Path, tmp_path: Path
 ) -> None:
@@ -112,10 +144,10 @@ def test_the_command_runs_the_shutdown_command_it_is_given_once_the_host_is_idle
         "--shutdown-command",
         f"touch {tmp_path / 'down'}",
     ]
-    state_file.write_text("idle 1\n")
+    state_file.write_text(f"idle {int(time.time()) - 60}\n")
     subprocess.run([*command, "--idle-stop-minutes", "0"], check=True)
     assert not (tmp_path / "down").exists()
-    result = subprocess.run([*command, "--idle-stop-minutes", "15"], capture_output=True, text=True, check=True)
+    result = subprocess.run([*command, "--idle-stop-minutes", "0.001"], capture_output=True, text=True, check=True)
     assert (tmp_path / "down").exists()
     assert re.search(r"idle-stop: idle for .* minutes", result.stdout)
 

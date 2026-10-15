@@ -81,13 +81,13 @@ if aws_ lambda get-function --function-name "$function_name" >/dev/null 2>&1; th
   aws_ lambda update-function-code --function-name "$function_name" --zip-file "fileb://$work/starter.zip" >/dev/null
   aws_ lambda wait function-updated --function-name "$function_name"
   aws_ lambda update-function-configuration --function-name "$function_name" --role "$role_arn" \
-    --environment "file://$work/environment.json" >/dev/null
+    --timeout 180 --environment "file://$work/environment.json" >/dev/null
 else
-  echo "Creating function $function_name (Python 3.12, arm64, 128 MB, 10 s). Free: 1 million calls a month."
+  echo "Creating function $function_name (Python 3.12, arm64, 128 MB, 180 s). Free: 1 million calls a month."
   [ "$role_created" -eq 0 ] || sleep "${PF_STARTER_ROLE_WAIT:-10}" # a new role takes a few seconds to be usable by Lambda
   attempt=1
   until aws_ lambda create-function --function-name "$function_name" --runtime python3.12 --architectures arm64 \
-    --handler handler.lambda_handler --role "$role_arn" --timeout 10 --memory-size 128 \
+    --handler handler.lambda_handler --role "$role_arn" --timeout 180 --memory-size 128 \
     --zip-file "fileb://$work/starter.zip" --environment "file://$work/environment.json" >/dev/null 2>"$work/err"; do
     if [ "$attempt" -ge 6 ]; then
       cat "$work/err" >&2
@@ -99,6 +99,9 @@ else
   done
 fi
 aws_ lambda wait function-active-v2 --function-name "$function_name"
+# The URL is public, so a flood of requests must not fan out: at most 2 run at once, and the rest are throttled.
+echo "Limiting the function to 2 concurrent runs. Free."
+aws_ lambda put-function-concurrency --function-name "$function_name" --reserved-concurrent-executions 2 >/dev/null
 
 # 4. The function URL. Its auth type is NONE because GitHub cannot sign AWS requests; the function checks
 # GitHub's own signature instead, and refuses every request without a valid one.

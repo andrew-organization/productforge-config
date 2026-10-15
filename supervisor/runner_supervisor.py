@@ -20,9 +20,10 @@ Under a Sysbox runtime (`--runtime sysbox-runc`) the container instead runs in a
 confines it, and keeps its namespaced capabilities so the Docker engine inside it can start; the process and
 memory limits and the metadata check stay.
 
-With `--state-file` the supervisor records whether a job is running (`busy <epoch>`) or the moment the last
-one ended (`idle <epoch>`), for `idle_stop.py`, a separate root-owned timer that stops an EC2 instance that
-has been idle for a while. The supervisor never gets the right to stop the host itself.
+With `--state-file` the supervisor records whether a job is running (`busy <epoch>`, refreshed while it runs) or
+the moment it became idle (`idle <epoch>`, written once, at start or when a job ends, and left alone while it
+waits), for `idle_stop.py`, a separate root-owned timer that stops an EC2 instance that has been idle for a while.
+The supervisor never gets the right to stop the host itself.
 """
 
 import argparse
@@ -168,14 +169,24 @@ def group_runners(*, group_id: int, settings: Settings) -> list[dict[str, Any]]:
     return pages(key="runners", path=path, settings=settings)
 
 
-def record_activity(*, state: str, settings: Settings) -> None:
+def record_activity(*, state: str, settings: Settings, restart: bool = False) -> None:
     """Writes `busy <epoch>` or `idle <epoch>` to the state file, atomically; a no-op without `--state-file`.
+
+    `busy` is written every time, which refreshes it. `idle` is written only when the file does not already say
+    `idle` (or `restart` is set), so its epoch stays the moment the host became idle and the idle stop can count
+    from it.
 
     A failed write is logged and never stops the supervisor: the idle stop then errs towards keeping the host up.
     """
     if not settings.state_file:
         return
     target = Path(settings.state_file)
+    if state == "idle" and not restart:
+        try:
+            if target.read_text().startswith("idle "):
+                return
+        except OSError:
+            pass
     temporary = target.with_name(f"{target.name}.tmp")
     try:
         temporary.write_text(f"{state} {int(time.time())}\n")
@@ -390,7 +401,8 @@ def run_one(*, group_id: int, settings: Settings, stop: Stop) -> bool:
         if container is not None:
             container.wait()
         removed = delete_runner(runner_id=runner_id, settings=settings)
-        record_activity(state="idle", settings=settings)
+        # A job that ended restarts the quiet period; a container that failed without one leaves it running.
+        record_activity(state="idle", settings=settings, restart=status == 0)
         log(message=f"removed {'runner and ' if removed else ''}container {name}")
     return status == 0
 
@@ -402,7 +414,7 @@ def supervise(*, settings: Settings, stop: Stop) -> None:
         return
     check_metadata_unreachable(settings=settings)
     sweep(group_id=group_id, settings=settings)
-    record_activity(state="idle", settings=settings)
+    record_activity(state="idle", settings=settings, restart=True)
     runs = 0
     while not stop.requested and (settings.max_jobs == 0 or runs < settings.max_jobs):
         if not wait_for_docker(settings=settings, stop=stop):

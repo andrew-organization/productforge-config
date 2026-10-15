@@ -36,7 +36,7 @@ def read_state(*, path: Path) -> tuple[str, float] | None:
     try:
         state, epoch = path.read_text().split()
         return (state, float(epoch)) if state in ("busy", "idle") else None
-    except OSError, ValueError:
+    except (OSError, ValueError):  # fmt: skip
         return None
 
 
@@ -44,19 +44,21 @@ def boot_time(*, now: float) -> float:
     """When the host booted, from /proc/uptime; now when that cannot be read."""
     try:
         return now - float(Path("/proc/uptime").read_text().split()[0])
-    except OSError, ValueError, IndexError:
+    except (OSError, ValueError, IndexError):  # fmt: skip
         return now
 
 
 def idle_seconds(*, state: tuple[str, float] | None, now: float, booted: float) -> float:
-    """How long the host has been idle: 0 while a job runs, else the time since the last activity."""
+    """How long the host has been idle: 0 while a job runs, else the time since the later of the last activity and
+    the boot, so a state file left by a previous run of the host adds nothing.
+    """
     if state is None:
         return now - booted
     kind, epoch = state
     epoch = min(epoch, now)
     if kind == "busy" and now - epoch < BUSY_STALE_SECONDS:
         return 0.0
-    return now - epoch
+    return now - max(epoch, booted)
 
 
 def check(*, idle_stop_minutes: float, now: float, shutdown: list[str], state_file: Path, booted: float) -> bool:
@@ -65,6 +67,11 @@ def check(*, idle_stop_minutes: float, now: float, shutdown: list[str], state_fi
         return False
     idle = idle_seconds(state=read_state(path=state_file), now=now, booted=booted)
     if idle < idle_stop_minutes * 60:
+        return False
+    # Re-read just before stopping: a job that started since the first read keeps the host up.
+    idle = idle_seconds(state=read_state(path=state_file), now=now, booted=booted)
+    if idle < idle_stop_minutes * 60:
+        log(message="a job started while the host was about to stop: not stopping it")
         return False
     log(message=f"idle for {idle / 60:.1f} minutes, at or over {idle_stop_minutes:g}: stopping the host")
     subprocess.run(shutdown, check=True)

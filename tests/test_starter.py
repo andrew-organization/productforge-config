@@ -17,19 +17,51 @@ SECRET = "webhook-secret-value"
 INSTANCE = "i-0123456789abcdef0"
 
 
+class RefusedStart(Exception):
+    """What boto3's ClientError looks like to the function: an exception with an error code in `response`."""
+
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.response = {"Error": {"Code": code}}
+
+
+class FakeWaiter:
+    def __init__(self, ec2: FakeEc2) -> None:
+        self.ec2 = ec2
+
+    def wait(self, *, InstanceIds: list[str], WaiterConfig: dict[str, int]) -> None:
+        self.ec2.waited.append((InstanceIds, WaiterConfig))
+        if self.ec2.never_stops:
+            raise RuntimeError("Max attempts exceeded")
+        self.ec2.state = "stopped"
+
+
 class FakeEc2:
     """Records the calls made to it and answers describe_instances with the state it was given."""
 
-    def __init__(self, state: str = "stopped") -> None:
+    def __init__(self, state: str = "stopped", *, refuse_start_as: str | None = None, after_refusal: str = "") -> None:
         self.state = state
+        self.refuse_start_as = refuse_start_as
+        self.after_refusal = after_refusal
+        self.never_stops = False
         self.described: list[list[str]] = []
         self.started: list[list[str]] = []
+        self.waited: list[tuple[list[str], dict[str, int]]] = []
+        self.waiters: list[str] = []
 
     def describe_instances(self, *, InstanceIds: list[str]) -> dict[str, Any]:
         self.described.append(InstanceIds)
         return {"Reservations": [{"Instances": [{"State": {"Name": self.state}}]}]}
 
+    def get_waiter(self, name: str) -> FakeWaiter:
+        self.waiters.append(name)
+        return FakeWaiter(self)
+
     def start_instances(self, *, InstanceIds: list[str]) -> dict[str, Any]:
+        if self.refuse_start_as:
+            code, self.refuse_start_as = self.refuse_start_as, None
+            self.state = self.after_refusal
+            raise RefusedStart(code)
         self.started.append(InstanceIds)
         return {}
 
@@ -129,12 +161,51 @@ def test_a_workflow_job_that_is_not_queued_is_ignored(starter: ModuleType, actio
     assert ec2.described == [] and ec2.started == []
 
 
-@pytest.mark.parametrize("state", ["running", "pending", "stopping", "shutting-down"])
+@pytest.mark.parametrize("state", ["running", "pending", "shutting-down"])
 def test_an_instance_that_is_not_stopped_is_not_started_again(starter: ModuleType, state: str) -> None:
     ec2 = FakeEc2(state)
     response = starter.handle(event=delivery(job()), environ=ENVIRON, ec2=ec2)
     assert response["statusCode"] == 200
     assert ec2.described == [[INSTANCE]] and ec2.started == []
+
+
+def test_a_job_queued_while_the_instance_is_stopping_waits_for_it_to_stop_then_starts_it(starter: ModuleType) -> None:
+    ec2 = FakeEc2("stopping")
+    response = starter.handle(event=delivery(job()), environ=ENVIRON, ec2=ec2)
+    assert response["statusCode"] == 200
+    assert ec2.waiters == ["instance_stopped"]
+    assert ec2.waited == [([INSTANCE], {"Delay": 5, "MaxAttempts": 30})]
+    assert ec2.started == [[INSTANCE]]
+
+
+def test_an_instance_that_never_finishes_stopping_is_a_500_so_the_delivery_can_be_redelivered(
+    starter: ModuleType,
+) -> None:
+    ec2 = FakeEc2("stopping")
+    ec2.never_stops = True
+    assert starter.handle(event=delivery(job()), environ=ENVIRON, ec2=ec2)["statusCode"] == 500
+    assert ec2.started == []
+
+
+def test_a_start_refused_because_the_instance_began_stopping_waits_and_starts_it_again(starter: ModuleType) -> None:
+    ec2 = FakeEc2("stopped", refuse_start_as="IncorrectInstanceState", after_refusal="stopping")
+    response = starter.handle(event=delivery(job()), environ=ENVIRON, ec2=ec2)
+    assert response["statusCode"] == 200
+    assert len(ec2.waited) == 1
+    assert ec2.started == [[INSTANCE]]
+
+
+@pytest.mark.parametrize("now", ["running", "pending"])
+def test_a_start_refused_because_another_delivery_already_started_it_is_a_200(starter: ModuleType, now: str) -> None:
+    ec2 = FakeEc2("stopped", refuse_start_as="IncorrectInstanceState", after_refusal=now)
+    response = starter.handle(event=delivery(job()), environ=ENVIRON, ec2=ec2)
+    assert response["statusCode"] == 200 and now in response["body"]
+    assert ec2.started == [] and ec2.waited == []
+
+
+def test_a_start_refused_for_any_other_reason_is_a_500(starter: ModuleType) -> None:
+    ec2 = FakeEc2("stopped", refuse_start_as="UnauthorizedOperation")
+    assert starter.handle(event=delivery(job()), environ=ENVIRON, ec2=ec2)["statusCode"] == 500
 
 
 def test_a_ping_is_answered_200_when_signed_and_401_when_not(starter: ModuleType) -> None:
@@ -259,6 +330,9 @@ def test_the_script_creates_the_role_function_and_url_and_prints_the_url_without
         assert expected in commands
     assert "--auth-type NONE" in calls
     assert "--runtime python3.12" in calls
+    create_call = next(line for line in calls.splitlines() if line.split()[5] == "create-function")
+    assert "--timeout 180" in create_call
+    assert "put-function-concurrency --function-name pf-runner-starter --reserved-concurrent-executions 2" in calls
     assert json.loads((tmp_path / "environment.json").read_text()) == {
         "Variables": {"WEBHOOK_SECRET": SECRET, "INSTANCE_ID": INSTANCE, "RUNNER_LABELS": "self-hosted,pf"}
     }
@@ -271,10 +345,14 @@ def test_running_the_script_again_updates_what_exists_instead_of_creating_it_twi
     (tmp_path / "exists").write_text("")
     result = create(shipped, tmp_path, fake_aws)
     assert result.returncode == 0, result.stderr
-    commands = [line.split()[5] for line in (tmp_path / "aws.log").read_text().splitlines()]
+    calls = (tmp_path / "aws.log").read_text()
+    commands = [line.split()[5] for line in calls.splitlines()]
     assert "create-role" not in commands and "create-function" not in commands
     assert "create-function-url-config" not in commands
     assert "update-function-code" in commands and "update-function-configuration" in commands
+    update_call = next(line for line in calls.splitlines() if line.split()[5] == "update-function-configuration")
+    assert "--timeout 180" in update_call
+    assert "put-function-concurrency" in commands
 
 
 def test_the_script_refuses_an_empty_secret_file_and_missing_arguments(

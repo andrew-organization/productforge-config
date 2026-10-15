@@ -9,7 +9,8 @@ Configuration, from the function's environment:
   RUNNER_LABELS   comma-separated labels a job must all ask for (default `self-hosted,pf`)
 
 Every delivery GitHub sends is answered with a 2xx, so GitHub never marks the webhook failing, unless its
-signature is wrong (401) or the function itself is misconfigured or AWS refuses it (500).
+signature is wrong (401) or the function itself is misconfigured or AWS refuses it (500). A job queued while
+the instance is stopping waits (at most 150 s) for it to stop and then starts it.
 """
 
 import base64
@@ -22,6 +23,8 @@ from collections.abc import Mapping
 from typing import Any
 
 DEFAULT_LABELS = "self-hosted,pf"
+WAITER_DELAY = 5
+WAITER_ATTEMPTS = 30
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -70,24 +73,59 @@ def handle(*, event: Mapping[str, Any], environ: Mapping[str, str], ec2: Any) ->
         payload = json.loads(body)
         action = payload["action"]
         labels = {str(label).lower() for label in payload["workflow_job"]["labels"]}
-    except ValueError, KeyError, TypeError:
+    except (ValueError, KeyError, TypeError):  # fmt: skip
         return respond(status=200, message="ignored: not a workflow_job payload")
     if action != "queued":
         return respond(status=200, message=f"ignored action {action}")
     if not wanted_labels(environ=environ) <= labels:
         return respond(status=200, message="ignored: the job is not for this runner")
     try:
-        reservations = ec2.describe_instances(InstanceIds=[instance_id])["Reservations"]
-        state = reservations[0]["Instances"][0]["State"]["Name"]
-        if state != "stopped":
-            logger.info("instance %s is %s: not starting it", instance_id, state)
-            return respond(status=200, message=f"instance is {state}")
-        ec2.start_instances(InstanceIds=[instance_id])
+        message = start_when_stopped(ec2=ec2, instance_id=instance_id)
     except Exception:
         logger.exception("could not describe or start instance %s", instance_id)
         return respond(status=500, message="could not start the instance")
-    logger.info("started instance %s for a queued job", instance_id)
-    return respond(status=200, message="starting the instance")
+    return respond(status=200, message=message)
+
+
+def instance_state(*, ec2: Any, instance_id: str) -> str:
+    """The instance's EC2 state name, such as `stopped` or `running`."""
+    return ec2.describe_instances(InstanceIds=[instance_id])["Reservations"][0]["Instances"][0]["State"]["Name"]
+
+
+def wait_until_stopped(*, ec2: Any, instance_id: str) -> None:
+    """Blocks until a stopping instance has stopped, for at most WAITER_DELAY * WAITER_ATTEMPTS seconds."""
+    logger.info("instance %s is stopping: waiting for it to stop", instance_id)
+    ec2.get_waiter("instance_stopped").wait(
+        InstanceIds=[instance_id], WaiterConfig={"Delay": WAITER_DELAY, "MaxAttempts": WAITER_ATTEMPTS}
+    )
+
+
+def start_when_stopped(*, ec2: Any, instance_id: str) -> str:
+    """Starts the instance when it is stopped, waiting out a stop in progress; returns the response message.
+
+    A running or pending instance is left alone. When the start is refused as `IncorrectInstanceState` (the
+    state moved since it was read) the state is read again, once: a running or pending one is fine, a stopping
+    one is waited for and started.
+    """
+    state = instance_state(ec2=ec2, instance_id=instance_id)
+    for attempt in range(2):
+        if state == "stopping":
+            wait_until_stopped(ec2=ec2, instance_id=instance_id)
+            state = "stopped"
+        if state != "stopped":
+            logger.info("instance %s is %s: not starting it", instance_id, state)
+            return f"instance is {state}"
+        try:
+            ec2.start_instances(InstanceIds=[instance_id])
+        except Exception as error:
+            code = getattr(error, "response", {}).get("Error", {}).get("Code")
+            if code != "IncorrectInstanceState" or attempt == 1:
+                raise
+            state = instance_state(ec2=ec2, instance_id=instance_id)
+            continue
+        logger.info("started instance %s for a queued job", instance_id)
+        return "starting the instance"
+    raise RuntimeError("unreachable")
 
 
 def lambda_handler(event: Mapping[str, Any], context: Any) -> dict[str, Any]:

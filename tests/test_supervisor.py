@@ -622,3 +622,37 @@ def test_without_a_state_file_nothing_is_recorded_or_polled(host: Host, endpoint
     host.start("--max-jobs", "1").communicate(timeout=30)
     assert not [c for c in endpoint.calls if c.startswith("GET /orgs/acme/actions/runners/")]
     assert not (host.root / "activity").exists()
+
+
+def test_the_idle_time_is_not_refreshed_while_the_runner_waits_for_a_job(host: Host, endpoint: Endpoint) -> None:
+    state_file = host.root / "activity"
+    host.outcomes("hang")
+    process = host.start("--state-file", str(state_file), "--activity-poll-seconds", "0.05")
+    host.wait_for(lambda: state_file.exists() and state_file.read_text().startswith("idle "))
+    first = state_file.read_text()
+    polls = len([c for c in endpoint.calls if c.startswith("GET /orgs/acme/actions/runners/")])
+    time.sleep(2.2)  # the epoch has whole-second resolution, so a rewrite would show within this
+    assert len([c for c in endpoint.calls if c.startswith("GET /orgs/acme/actions/runners/")]) > polls + 1
+    assert state_file.read_text() == first
+    process.send_signal(signal.SIGTERM)
+    process.communicate(timeout=30)
+
+
+def test_the_idle_time_moves_once_when_a_busy_runner_becomes_idle(host: Host, endpoint: Endpoint) -> None:
+    state_file = host.root / "activity"
+    host.outcomes("hang")
+    process = host.start("--state-file", str(state_file), "--activity-poll-seconds", "0.05")
+    host.wait_for(lambda: state_file.exists() and state_file.read_text().startswith("idle "))
+    started_idle = int(state_file.read_text().split()[1])
+    time.sleep(1.1)
+    endpoint.busy = True
+    host.wait_for(lambda: state_file.read_text().startswith("busy "))
+    time.sleep(1.1)
+    endpoint.busy = False
+    host.wait_for(lambda: state_file.read_text().startswith("idle "))
+    became_idle = int(state_file.read_text().split()[1])
+    assert became_idle >= started_idle + 2
+    time.sleep(2.2)
+    assert state_file.read_text() == f"idle {became_idle}\n"
+    process.send_signal(signal.SIGTERM)
+    process.communicate(timeout=30)

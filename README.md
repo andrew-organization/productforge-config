@@ -825,10 +825,22 @@ provides) behind a function URL. A GitHub organisation webhook for `workflow_job
 - for a `queued` job whose labels include every label in `RUNNER_LABELS` (default `self-hosted,pf`), asks EC2
   for the instance's state and calls `ec2:StartInstances` only when it is `stopped`. A running or pending
   instance is left alone, so a burst of queued jobs starts it once;
-- answers `500` when AWS refuses or fails, so GitHub shows the delivery as failed and it can be redelivered.
+- answers `500` when AWS refuses or fails, so GitHub shows the delivery as failed and it can be redelivered;
+- waits, when the instance is `stopping` (the minute after an idle stop), for it to stop (every 5 seconds, up to 30
+  times, so the function's timeout is 180 seconds) and then starts it; a start refused as `IncorrectInstanceState`
+  because the state moved is read again and handled the same way.
 
-A job that queues while the instance is `stopping` (the minute after an idle stop) finds nothing to start, and
-waits until the next job queues or its delivery is redelivered from GitHub's webhook page.
+**The residual window**: the idle stop runs `shutdown -h now`, and EC2 goes on reporting `running` for a few
+seconds after the operating system has begun halting. A job queued in that window finds a `running` instance,
+starts nothing, and waits for a server that is going down. `idle_stop.py` re-reads the state file just before it
+shuts down and does nothing when a job has become busy, which narrows the window to the moments between that read
+and the shutdown. A job caught in it stays queued until the next job queues or its delivery is redelivered: in
+GitHub, the organisation's Settings, Webhooks, the webhook, *Recent deliveries*, the `workflow_job` delivery for
+that job, *Redeliver*. The instance is then `stopped` and the redelivery starts it.
+
+**The public URL**: the function URL has auth type `NONE`, so anyone can send it a request, and every request
+without a valid GitHub signature is answered 401 before anything else happens. The function has a reserved
+concurrency of 2, so a flood of requests cannot fan out or consume the account's concurrency.
 
 `supervisor/starter/iam-policy.json` is the function's role policy: `ec2:StartInstances` on that one instance's
 ARN, `ec2:DescribeInstances` (EC2 cannot scope it to a resource) and writing logs to the function's own log
@@ -844,8 +856,8 @@ supervisor/starter/create-starter.sh --instance-id i-... --region eu-west-1 \
 ```
 
 It creates, saying what and its cost as it goes: the role `pf-runner-starter-role` with the policy above; the
-log group `/aws/lambda/pf-runner-starter`, kept 14 days; the function `pf-runner-starter` (arm64, 128 MB, 10
-seconds) with the secret, instance id and labels as environment variables; and a function URL with auth type
+log group `/aws/lambda/pf-runner-starter`, kept 14 days; the function `pf-runner-starter` (arm64, 128 MB, 180
+seconds, reserved concurrency 2) with the secret, instance id and labels as environment variables; and a function URL with auth type
 `NONE`, because GitHub cannot sign AWS requests and the function verifies GitHub's signature instead. It prints
 the URL. Running it again updates the function and its settings instead of duplicating anything; `--function-name`
 and `--labels` change the defaults. The secret is read from the file and sent to AWS from a private temporary
@@ -874,14 +886,15 @@ start-instances`). Turning it back on starts it with the next queued job.
 The instance's shutdown behaviour is `stop`, so `shutdown -h now` on it stops the instance. The supervisor runs as
 `pf-runner`, in the `docker` group, and is not given the right to stop the host. Instead it records its activity
 in `/var/lib/productforge-runner/activity` (`--state-file`): `busy <epoch>`, refreshed every 10 seconds
-(`--activity-poll-seconds`) while GitHub reports its runner running a job, and `idle <epoch>` from the moment its
-last job ended or it started. A job the supervisor cannot ask GitHub about counts as busy.
+(`--activity-poll-seconds`) while GitHub reports its runner running a job, and `idle <epoch>`, written once when its
+last job ended or it started and left unchanged while it waits. A job the supervisor cannot ask GitHub about counts as busy.
 
 `supervisor/idle_stop.py`, run every minute by the root timer `productforge-runner-idle-stop.timer`, reads that
 file and runs `shutdown -h now` once the host has been idle for `--idle-stop-minutes` (default 15). It never stops
 the host while the file says `busy` and is fresh, so it never stops a host a job container is running on, and a
 job that ends restarts the quiet period. A `busy` record older than 5 minutes (a supervisor that died) counts as
-idle from its last refresh; with no readable file the host's boot time stands in for the last activity. `0`
+idle from its last refresh; the idle time is counted from the later of the file's epoch and the host's boot, and
+with no readable file the boot time stands in for the last activity. `0`
 disables the stop. The only things `pf-runner` can influence are that file's two words and its number, not
 anything the root timer runs.
 
