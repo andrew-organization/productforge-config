@@ -624,10 +624,12 @@ one. An idle runner holds no job and no data.
   checks `docker info` before every registration and, failing, retries with a
   backoff (doubling from `--retry-seconds`, to five minutes) rather than minting
   a registration per attempt.
-- **Containers must not reach the EC2 instance metadata service**
+- **Containers must not read the EC2 instance metadata service**
   (`169.254.169.254`), whose role credentials a job could otherwise read. On an
-  EC2 host set IMDSv2 required and the hop limit to 1, so a container on the
-  docker bridge, one hop further than the host, gets no answer:
+  EC2 host set IMDSv2 required and the hop limit to 1: every read then needs a
+  session token, and the token's answer never reaches a container on the docker
+  bridge, one hop further than the host, so a container can ask but read nothing
+  (a request without a token answers 401):
 
   ```sh
   aws ec2 modify-instance-metadata-options --instance-id i-0123456789abcdef0 \
@@ -637,8 +639,9 @@ one. An idle runner holds no job and no data.
   and attach no instance role the host does not need (ideally none), because
   whatever the role grants is one misconfiguration from a job. At start the
   supervisor proves it: it runs a short check container, confined as a job's is,
-  that asks `169.254.169.254` for anything, and refuses to start (exit 1, one
-  line) if it gets any HTTP answer at all, or cannot run the check. Pass
+  that asks `169.254.169.254` for a session token and for metadata without one,
+  and refuses to start (exit 1, one line) if either answers 200, or if it cannot
+  run the check. Pass
   `--allow-metadata-reachable` to skip the check, only for a local test on a
   machine that is not an EC2 instance.
 - The runner image, pinned by digest: the default `--image` is
