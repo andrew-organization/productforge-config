@@ -31,6 +31,17 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && usermod --append --groups docker runner
 
+# The `taplo` pre-commit hook asks pip for taplo at the version it pins, which has no Linux arm64 wheel on PyPI and a source
+# distribution that does not build. A wheel made from taplo's own arm64 release binary, which pip finds first
+# through PIP_FIND_LINKS, satisfies it. TAPLO_VERSION is that version; a test keeps it equal to the hook's.
+ARG TAPLO_VERSION=0.9.3
+COPY taplo_wheel.py /tmp/taplo_wheel.py
+RUN curl -fsSL "https://github.com/tamasfe/taplo/releases/download/${TAPLO_VERSION}/taplo-linux-aarch64.gz" \
+        | gunzip > /tmp/taplo \
+    && python3 /tmp/taplo_wheel.py "${TAPLO_VERSION}" /tmp/taplo /opt/wheels \
+    && rm /tmp/taplo /tmp/taplo_wheel.py
+ENV PIP_FIND_LINKS=/opt/wheels
+
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod 0755 /usr/local/bin/entrypoint.sh
 

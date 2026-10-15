@@ -13,6 +13,7 @@ import subprocess
 import sys
 import threading
 import time
+import zipfile
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -370,6 +371,26 @@ def test_the_entrypoint_starts_the_engine_then_hands_the_runner_to_the_runner_us
     assert text.index("dockerd") < text.index("runuser --user runner")
     assert "usermod --append --groups docker runner" in (shipped / RUNNER_IMAGE / "Dockerfile").read_text()
     assert 'ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]' in (shipped / RUNNER_IMAGE / "Dockerfile").read_text()
+
+
+def test_the_image_carries_an_arm64_taplo_wheel_for_the_hook_that_pins_it(shipped: Path, tmp_path: Path) -> None:
+    dockerfile = (shipped / RUNNER_IMAGE / "Dockerfile").read_text()
+    assert "ENV PIP_FIND_LINKS=/opt/wheels" in dockerfile and "taplo-linux-aarch64.gz" in dockerfile
+    version = next(line for line in dockerfile.splitlines() if line.startswith("ARG TAPLO_VERSION=")).split("=")[1]
+    assert f'additional_dependencies: ["taplo=={version}"]' in (shipped / ".pre-commit-hooks.yaml").read_text()
+    binary = tmp_path / "taplo"
+    binary.write_bytes(b"binary")
+    script = shipped / RUNNER_IMAGE / "taplo_wheel.py"
+    done = subprocess.run(
+        [sys.executable, str(script), version, str(binary), str(tmp_path / "wheels")],
+        capture_output=True, text=True, check=False,
+    )  # fmt: skip
+    assert done.returncode == 0, done.stderr
+    (wheel,) = (tmp_path / "wheels").glob("*.whl")
+    assert wheel.name == f"taplo-{version}-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl"
+    with zipfile.ZipFile(wheel) as archive:
+        assert archive.read(f"taplo-{version}.data/scripts/taplo") == b"binary"
+        assert (archive.getinfo(f"taplo-{version}.data/scripts/taplo").external_attr >> 16) & 0o111
 
 
 def test_the_build_command_tags_the_image_with_the_release(host: Host, shipped: Path) -> None:
