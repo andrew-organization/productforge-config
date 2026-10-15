@@ -712,6 +712,18 @@ and go with it, and it cannot reach the host's Docker. Moving the base digest me
 changing it in `DEFAULT_IMAGE` and in the Dockerfile's `BASE_IMAGE`; a test keeps
 the two equal.
 
+The image also carries Flutter, cloned from Flutter's git repository at
+`FLUTTER_VERSION` (a Dockerfile build argument) with its web artefacts
+fetched, because `flutter-action` finds no Linux arm64 SDK in Flutter's release
+manifest. **The image's Flutter must equal the version in the repositories'
+`.fvmrc`**, which is `settings/fvmrc` in this repository; a test keeps the
+Dockerfile's `FLUTTER_VERSION` equal to it. `actions/setup` with `flutter: true`
+skips `flutter-action` when the `flutter` on `PATH` already reports the version
+`.fvmrc` pins, and otherwise sets Flutter up as before, so hosted runners are
+unchanged. When `settings/fvmrc` moves, change `FLUTTER_VERSION` in the same
+release and rebuild the image as below; until it is rebuilt, a job on the runner
+finds a different Flutter, falls back to `flutter-action`, and fails on arm64.
+
 On the host, install Sysbox CE from its release (Ubuntu 24.04, arm64 shown;
 check the
 [releases](https://github.com/nestybox/sysbox/releases) for the newest):

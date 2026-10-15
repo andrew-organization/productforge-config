@@ -543,3 +543,10 @@ def test_docker_going_down_after_a_job_stops_new_registrations(host: Host, endpo
     assert len(endpoint.bodies) == 1  # no registration per retry while it is down
     process.send_signal(signal.SIGTERM)
     process.communicate(timeout=30)
+
+
+def test_the_image_carries_the_flutter_the_repositories_pin(shipped: Path) -> None:
+    dockerfile = (shipped / RUNNER_IMAGE / "Dockerfile").read_text()
+    version = next(line for line in dockerfile.splitlines() if line.startswith("ARG FLUTTER_VERSION=")).split("=")[1]
+    assert version == json.loads((shipped / "settings" / "fvmrc").read_text())["flutter"]
+    assert "git clone https://github.com/flutter/flutter.git --branch" in dockerfile and "precache --web" in dockerfile

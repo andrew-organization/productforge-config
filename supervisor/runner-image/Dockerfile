@@ -42,6 +42,21 @@ RUN curl -fsSL "https://github.com/tamasfe/taplo/releases/download/${TAPLO_VERSI
     && rm /tmp/taplo /tmp/taplo_wheel.py
 ENV PIP_FIND_LINKS=/opt/wheels
 
+# Flutter, from its own git repository at the version the repositories' `.fvmrc` pins (settings/fvmrc): flutter-action
+# finds no Linux arm64 SDK in Flutter's release manifest, so the image carries it and actions/setup skips the action
+# when `flutter` on PATH already reports that version. FLUTTER_VERSION must equal settings/fvmrc's (a test keeps it
+# so); when that moves, rebuild the image (the supervisor's README says how). Owned by `runner`, since Flutter writes
+# its caches inside its SDK directory. The web artefacts are fetched now, so a job downloads none.
+ARG FLUTTER_VERSION=3.44.7
+ENV FLUTTER_HOME=/opt/flutter
+ENV PATH=${FLUTTER_HOME}/bin:${PATH}
+RUN install -d -o runner -g runner "${FLUTTER_HOME}"
+USER runner
+RUN git clone https://github.com/flutter/flutter.git --branch "${FLUTTER_VERSION}" --depth 1 "${FLUTTER_HOME}" \
+    && flutter --version \
+    && flutter precache --web
+USER root
+
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod 0755 /usr/local/bin/entrypoint.sh
 
