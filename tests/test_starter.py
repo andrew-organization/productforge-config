@@ -288,6 +288,8 @@ elif command in ("get-role", "get-function", "get-function-url-config"):
         print("https://abc.lambda-url.eu-west-1.on.aws/")
 elif command.startswith("create-"):
     (root / ("created-get-" + command.removeprefix("create-"))).write_text("")
+elif command == "put-function-concurrency" and (root / "small-quota").exists():
+    sys.exit(254)
 if "--environment" in args:
     environment = Path(args[args.index("--environment") + 1].removeprefix("file://"))
     (root / "environment.json").write_text(environment.read_text())
@@ -353,6 +355,16 @@ def test_running_the_script_again_updates_what_exists_instead_of_creating_it_twi
     update_call = next(line for line in calls.splitlines() if line.split()[5] == "update-function-configuration")
     assert "--timeout 180" in update_call
     assert "put-function-concurrency" in commands
+
+
+def test_a_quota_too_small_to_reserve_concurrency_is_reported_and_the_setup_carries_on(
+    shipped: Path, tmp_path: Path, fake_aws: Path
+) -> None:
+    (tmp_path / "small-quota").write_text("")
+    result = create(shipped, tmp_path, fake_aws)
+    assert result.returncode == 0, result.stderr
+    assert "could not reserve concurrency" in result.stdout
+    assert result.stdout.rstrip().endswith("https://abc.lambda-url.eu-west-1.on.aws/")
 
 
 def test_the_script_refuses_an_empty_secret_file_and_missing_arguments(

@@ -101,7 +101,11 @@ fi
 aws_ lambda wait function-active-v2 --function-name "$function_name"
 # The URL is public, so a flood of requests must not fan out: at most 2 run at once, and the rest are throttled.
 echo "Limiting the function to 2 concurrent runs. Free."
-aws_ lambda put-function-concurrency --function-name "$function_name" --reserved-concurrent-executions 2 >/dev/null
+# A new account's concurrency quota can be too small to reserve any (AWS keeps 10 unreserved), so a refusal
+# here is reported and the setup carries on: GitHub's signature check still refuses every forged request.
+if ! aws_ lambda put-function-concurrency --function-name "$function_name" --reserved-concurrent-executions 2 >/dev/null; then
+  echo "  could not reserve concurrency (the account's Lambda quota is too small); continuing without the limit"
+fi
 
 # 4. The function URL. Its auth type is NONE because GitHub cannot sign AWS requests; the function checks
 # GitHub's own signature instead, and refuses every request without a valid one.
