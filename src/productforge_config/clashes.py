@@ -86,8 +86,20 @@ def docker_compose_available() -> bool:
     return subprocess.run(["docker", "compose", "version"], capture_output=True).returncode == 0
 
 
+def refuse_repeats(given: list[str]) -> None:
+    """A ClashError naming a checkout given more than once, which would clash with itself on every value."""
+    seen: dict[Path, str] = {}
+    for label in given:
+        resolved = Path(label).resolve()
+        if resolved in seen:
+            raise ClashError(f"{label}: given twice, as {seen[resolved]} and as {label}")
+        seen[resolved] = label
+
+
 def read_declaration(*, label: str, root: Path) -> kits.Declaration:
     """The checkout's declaration, or a ClashError naming the checkout and what is wrong."""
+    if not root.is_dir():
+        raise ClashError(f"{label}: is not a directory")
     try:
         declaration = kits.read_env(root)
     except kits.EnvError as exc:

@@ -239,8 +239,10 @@ reads each one's `productforge.env` and works out the `PF_` values its kit's
 makefile works out. For a checkout that takes `django-api` it runs
 `docker compose --env-file productforge.env -f .productforge/compose.yml
 --project-directory . config --format json` with them, adding `.env` and
-`docker-compose.local.yml` when the checkout has them, as `make up` does, so a
-port set by hand in either is seen. Nothing is started and nothing is written.
+`docker-compose.local.yml` when the checkout has them, as `make up` does: a port
+or name set in the overlay is seen, and `.env` is read as Compose reads it (the
+`PF_` values the makefile exports win over it). Nothing is started and nothing
+is written.
 
 | Value | Taken from | Clashes when |
 | --- | --- | --- |
@@ -260,8 +262,8 @@ when there is any. With `--json` the clashes are printed as a list of
 `{"kind", "value", "checkouts"}` objects, and the line saying what was compared
 goes to the error output.
 
-It refuses, naming the checkout, printing nothing else and exiting 2, a checkout
-with no `productforge.env`, one whose declaration is invalid or takes no product
+It refuses, naming the checkout, printing nothing else and exiting 2, a path that
+is not a directory, one given twice, a checkout with no `productforge.env`, one whose declaration is invalid or takes no product
 kit, and one whose compose model does not resolve, such as an API not yet
 brought up to a release, which has no compose file. Without Docker on the path
 it compares host ports only, from the ports each kit uses in the slot's block,

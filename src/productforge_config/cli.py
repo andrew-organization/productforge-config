@@ -786,6 +786,7 @@ def _main_clashes(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
         parser.error("clashes compares two or more checkouts")
     resolve = clashes.docker_compose_available()
     try:
+        clashes.refuse_repeats(args.checkouts)
         checkouts = [clashes.read_checkout(label=given, resolve=resolve, root=Path(given)) for given in args.checkouts]
     except clashes.ClashError as exc:
         print(f"productforge-config: {exc}", file=sys.stderr)

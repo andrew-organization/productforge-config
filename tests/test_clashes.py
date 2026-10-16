@@ -126,7 +126,13 @@ def test_clashes_refuses_a_checkout_it_cannot_read_and_prints_nothing_else(
     invalid.write("productforge.env", "PF_KITS=django-api flutter-web\nPF_SLOT=2\nPF_NAME=invalid_web\n")
     unresolved = checkout("unresolved", kind="api", name="unresolved_api", slot=3, updated=False)  # no compose files
 
-    for refused, reason in ((bare, "has no productforge.env"), (invalid.root, "both"), (unresolved.root, "resolve")):
+    missing = tmp_path / "missing"
+    for refused, reason in (
+        (bare, "has no productforge.env"),
+        (missing, "is not a directory"),
+        (invalid.root, "both"),
+        (unresolved.root, "resolve"),
+    ):
         before = sorted(refused.rglob("*"))
 
         result = run_config("clashes", good.root, refused)
@@ -135,3 +141,16 @@ def test_clashes_refuses_a_checkout_it_cannot_read_and_prints_nothing_else(
         assert result.stderr.startswith(f"productforge-config: {refused}: ") and reason in result.stderr, reason
         assert sorted(refused.rglob("*")) == before, reason
     assert "two or more" in run_config("clashes", good.root).stderr
+    repeated = run_config("clashes", good.root, f"{good.root}/")
+    assert repeated.returncode == 2 and repeated.stdout == "" and "given twice" in repeated.stderr
+
+
+@pytest.mark.usefixtures("compose")
+def test_clashes_reads_the_checkouts_dotenv_as_make_up_does(checkout: Callable[..., Repo]) -> None:
+    one = checkout("one", kind="api", name="alpha", slot=1)
+    two = checkout("two", kind="api", name="beta", slot=2)
+    two.write(".env", "COMPOSE_PROJECT_NAME=alpha\n")  # a project name the file sets, which is one's
+
+    result = run_config("clashes", one.root, two.root)
+
+    assert result.returncode == 1 and f"Compose project alpha: {one.root}, {two.root}" in result.stdout
