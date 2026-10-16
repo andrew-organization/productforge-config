@@ -231,6 +231,19 @@ def test_a_token_a_public_config_and_no_token_with_a_private_config_each_behave_
         assert "andrew-organization/productforge-config can't be read" in refused.stdout
 
 
+def test_config_s_own_checks_keep_no_checkout_credentials_and_prove_where_the_token_is_held(shipped: Path) -> None:
+    jobs = yaml.safe_load((shipped / ".github" / "workflows" / "ci.yml").read_text())["jobs"]
+    checkouts = [
+        s for job in jobs.values() for s in job["steps"] if str(s.get("uses", "")).startswith("actions/checkout")
+    ]
+    scope_runs = [s.get("run") for s in jobs["token-scope"]["steps"] if s.get("run")]
+
+    assert len(checkouts) == 2 and all(c["with"]["persist-credentials"] is False for c in checkouts)
+    assert scope_runs.index("actions/setup/git_credential.sh") < scope_runs.index(
+        ".github/scripts/check_token_scope.sh"
+    )
+
+
 def action_steps(shipped: Path) -> dict[str, dict]:
     steps_ = yaml.safe_load((shipped / "actions" / "setup" / "action.yml").read_text())["runs"]["steps"]
     return {s["name"]: s for s in steps_ if "name" in s}

@@ -298,6 +298,9 @@ never with `secrets: inherit`: to the reusable workflows as `secrets:
 PF_READ_TOKEN`, and to `actions/setup` called directly as its `token` input.
 
 ```yaml
+- uses: actions/checkout@<sha>
+  with:
+    persist-credentials: false
 - uses: andrew-organization/productforge-config/actions/setup@v1.0.0
   with:
     token: ${{ secrets.PF_READ_TOKEN }}
@@ -318,9 +321,10 @@ nothing between jobs. This repository's own CI proves it on every pull request:
 `git config --list --show-origin` shows the entry from `command line:` only,
 and no Git configuration file contains it. Every later step of the job can read
 the entry, as it can any secret given through the environment, so the setup
-step comes after the job's own checkouts, which use `persist-credentials:
-false`: Git would otherwise send the checkout's own header beside the token's,
-and GitHub rejects a request with two. The header is sent only to repositories
+step runs once per job, after the job's own checkouts, which use
+`persist-credentials: false`, and no checkout of the owner's repositories runs
+after it: Git would otherwise send that checkout's own header beside the
+token's, and GitHub rejects a request with two. The header is sent only to repositories
 of the repository's own owner.
 
 On a person's own machine nothing uses the token: `make update-config`,
