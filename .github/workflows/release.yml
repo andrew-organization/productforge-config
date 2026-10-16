@@ -7,6 +7,8 @@ name: Release
 #     release:
 #       uses: andrew-organization/productforge-config/.github/workflows/release.yml@vX.Y.Z
 #       permissions: {contents: write, issues: write, pull-requests: write}
+#       secrets:
+#         PF_READ_TOKEN: ${{ secrets.PF_READ_TOKEN }}
 #
 # and this repository runs it on its own pushes to main. The squashed
 # commit's subject is the pull request title, and its Conventional Commits
@@ -16,6 +18,10 @@ name: Release
 # also carries its version in a file writes and commits it through
 # prepare-cmd, before the tag is made.
 #
+# PF_READ_TOKEN is the organisation's read token for productforge-config, which the job reads to
+# add the closing "To take this release" section to the release's notes (see the steps below). A
+# caller passes it by name, never with `secrets: inherit`, and this repository's own run needs none.
+#
 # A repository whose main requires a pull request can't let this job's own
 # token push that version commit: GitHub refuses github-actions[bot] as a
 # bypass actor. It may instead pass a write deploy key of its own, which its
@@ -24,7 +30,9 @@ name: Release
 # environment only main can use:
 #
 #       with: {environment: release}
-#       secrets: {PF_RELEASE_DEPLOY_KEY: "${{ secrets.PF_RELEASE_DEPLOY_KEY }}"}
+#       secrets:
+#         PF_READ_TOKEN: ${{ secrets.PF_READ_TOKEN }}
+#         PF_RELEASE_DEPLOY_KEY: ${{ secrets.PF_RELEASE_DEPLOY_KEY }}
 #
 # The job then declares that environment and checks out over SSH with the
 # key, so every push of the release, the version commit and the tag, goes
@@ -56,6 +64,13 @@ on:
         type: string
         default: ""
     secrets:
+      PF_READ_TOKEN:
+        description: >-
+          The organisation's read-only token for productforge-config, which the job reads to add
+          the closing section to the release's notes. Declared optional so that a caller without it
+          is refused by the job's first step, naming this secret, rather than at startup; only a
+          run of this repository's own release needs none.
+        required: false
       PF_RELEASE_DEPLOY_KEY:
         description: >-
           A write deploy key of the calling repository, as its private half.
@@ -90,6 +105,21 @@ jobs:
       pull-requests: write
 
     steps:
+      # A private productforge-config can't be read with the job's own token, so a caller that is
+      # not productforge-config itself must pass the read token; refused here, before anything is
+      # released, so a missing token never leaves a release without its closing section.
+      - name: Check the read token is given
+        env:
+          PF_TOKEN: ${{ secrets.PF_READ_TOKEN }}
+          CALLER_REPOSITORY: ${{ github.repository }}
+          CONFIG_REPOSITORY: ${{ job.workflow_repository }}
+        run: |
+          [ -n "${PF_TOKEN}" ] || [ "${CALLER_REPOSITORY}" = "${CONFIG_REPOSITORY}" ] || {
+            echo "::error::the release reads ${CONFIG_REPOSITORY} to write the release's notes:" \
+              "pass the organisation secret PF_READ_TOKEN to this workflow."
+            exit 1
+          }
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
@@ -139,6 +169,55 @@ jobs:
         run: npx semantic-release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # A run released when the newest stable tag sits on the commit the run is at, which a
+      # prepare-cmd's version commit then is too. The newest tag changing across the release step
+      # would not tell, since a re-run of a job that failed after releasing sees the same tag
+      # before and after; this way the re-run still adds the closing section.
+      - name: Find whether this run released
+        id: released
+        run: |
+          git fetch --quiet --tags origin
+          tag="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | grep -v -- '-' | head -n 1 || true)"
+          releasing=false
+          previous=""
+          if [ -n "${tag}" ] && [ "$(git rev-list -n 1 "${tag}")" = "$(git rev-parse HEAD)" ]; then
+            releasing=true
+            previous="$(git describe --tags --abbrev=0 --match 'v[0-9]*.[0-9]*.[0-9]*' --exclude '*-*' \
+              "${tag}^" 2>/dev/null || true)"
+          fi
+          {
+            echo "tag=${tag}"
+            echo "releasing=${releasing}"
+            echo "previous=${previous}"
+          } >> "${GITHUB_OUTPUT}"
+
+      # The code that finds the steps sections, read from this repository at the commit the
+      # workflow runs from, untracked in the caller's checkout.
+      - name: Read productforge-config
+        if: ${{ steps.released.outputs.releasing == 'true' }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .productforge-config
+          token: ${{ secrets.PF_READ_TOKEN || github.token }}
+          persist-credentials: false
+
+      - name: Keep the checkout of productforge-config out of the caller's status
+        if: ${{ steps.released.outputs.releasing == 'true' }}
+        run: echo ".productforge-config" >> .git/info/exclude
+
+      - name: Add the closing section to the release's notes
+        if: ${{ steps.released.outputs.releasing == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          PREVIOUS: ${{ steps.released.outputs.previous }}
+          TAG: ${{ steps.released.outputs.tag }}
+        run: >-
+          python3 -I .productforge-config/src/productforge_config/release_notes.py
+          --previous "${PREVIOUS}" --tag "${TAG}"
 
       # semantic-release exits successfully when it finds nothing to
       # release, including when a failed run left a tag behind without its
