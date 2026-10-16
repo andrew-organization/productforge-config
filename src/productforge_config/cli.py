@@ -616,7 +616,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Give a repository its own values and the thin files that use them: productforge.env, "
         "Makefile and .github/workflows/ci.yml, then run update.",
     )
-    init_parser.add_argument("--kind", required=True, choices=kits.KINDS, help="Which kit the repository takes.")
+    init_parser.add_argument(
+        "--kind",
+        default=None,
+        choices=kits.KINDS,
+        help="Which kit the repository takes. Omitted, it keeps the kits its own productforge.env declares.",
+    )
     init_parser.add_argument("--name", required=True, help="The repository's name, in snake_case (PF_NAME).")
     init_parser.add_argument("--slot", required=True, help="The product's port slot, shared by its API and web app.")
     init_parser.add_argument(
@@ -743,7 +748,9 @@ def _update_version(root: Path, args: argparse.Namespace) -> str:
 def _main_init(args: argparse.Namespace) -> int:
     root = Path(args.path).resolve()
     try:
-        decl = kits.for_kind(args.kind, args.slot, args.name)
+        decl = (
+            kits.for_kind(args.kind, args.slot, args.name) if args.kind else kits.for_copy(root, args.slot, args.name)
+        )
         version = resolve_version(args.version)
         changed = scaffold.init(root, decl, version, args.old_name)
         changed += update(root, version)
@@ -751,7 +758,7 @@ def _main_init(args: argparse.Namespace) -> int:
         print(f"productforge-config: {exc}", file=sys.stderr)
         return 1
     print(
-        f"productforge-config {version}: initialised {decl.name} ({args.kind}, slot {decl.slot}): {', '.join(changed)}"
+        f"productforge-config {version}: initialised {decl.name} ({decl.kind}, slot {decl.slot}): {', '.join(changed)}"
     )
     return 0
 

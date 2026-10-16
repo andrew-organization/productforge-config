@@ -1,5 +1,6 @@
 """`productforge-config init`: a repository's first declaration, its thin files, and the rename its `--from` does."""
 
+import shutil
 from pathlib import Path
 
 import pytest
@@ -122,6 +123,65 @@ def test_init_refuses_bad_values_before_writing_anything(
     assert result.returncode == 1
     assert message in result.stderr and result.stdout == ""
     assert list(tmp_path.iterdir()) == []
+
+
+def init_copy(root: Path, *extra: str, name: str = "acme_api", slot: str = "5"):
+    """`init` with no `--kind`: the kits come from the copy's own productforge.env."""
+    return run_config("init", "--name", name, "--slot", slot, "--version", VERSION, "--path", root, *extra)
+
+
+def test_init_with_no_kind_keeps_the_copys_kits_and_writes_what_kind_writes(tmp_path: Path, shipped: Path) -> None:
+    for kind in ("api", "web"):
+        copy, by_kind = tmp_path / f"copy_{kind}", tmp_path / f"kind_{kind}"
+        shutil.copytree(shipped / "tests" / f"fixture_{kind}", copy)
+        by_kind.mkdir()
+        name = f"acme_{kind}"
+
+        assert init_copy(copy, name=name).returncode == 0
+        assert init(by_kind, kind=kind, name=name).returncode == 0
+
+        for rel in ("productforge.env", "Makefile", ".github/workflows/ci.yml", ".productforge/release"):
+            assert (copy / rel).read_text() == (by_kind / rel).read_text(), (kind, rel)
+        assert f"PF_NAME={name}\n" in (copy / "productforge.env").read_text()
+
+        before = tree(copy)
+        assert init_copy(copy, name=name).returncode == 0  # the same values change nothing
+        assert tree(copy) == before
+
+
+def test_init_with_no_kind_keeps_a_declared_release_through_init_and_update(tmp_path: Path, shipped: Path) -> None:
+    copy = tmp_path / "copy"
+    shutil.copytree(shipped / "tests" / "fixture_api", copy)
+    env = copy / "productforge.env"
+    env.write_text(env.read_text().replace("PF_KITS=python django-api", "PF_KITS=python django-api release"))
+
+    assert init_copy(copy).returncode == 0
+    assert "PF_KITS=python django-api release\n" in env.read_text()
+
+    assert run_config("update", "--version", VERSION, "--path", copy).returncode == 0
+    assert "PF_KITS=python django-api release\n" in env.read_text()
+
+
+@pytest.mark.parametrize(
+    ("declaration", "message"),
+    [
+        (None, "productforge.env is missing"),
+        ("PF_KITS=python\n", "names neither django-api nor flutter-web"),
+        ("PF_KITS=django-api flutter-web\nPF_SLOT=3\nPF_NAME=x\n", "names both django-api and flutter-web"),
+    ],
+)
+def test_init_with_no_kind_refuses_a_copy_without_one_product_kit_and_writes_nothing(
+    tmp_path: Path, declaration: str | None, message: str
+) -> None:
+    if declaration is not None:
+        (tmp_path / "productforge.env").write_text(declaration)
+    before = tree(tmp_path)
+
+    result = init_copy(tmp_path)
+
+    assert result.returncode == 1 and result.stdout == ""
+    assert message in result.stderr and "productforge.env" in result.stderr
+    assert tree(tmp_path) == before
 
 
 # ─── --from: the rename ───────────────────────────────────────────────────
