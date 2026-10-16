@@ -56,12 +56,14 @@ def test_clashes_reports_each_value_two_checkouts_would_take_and_compares_ports_
     hand_set.write(
         "docker-compose.local.yml",
         "services:\n  django:\n    ports:\n      - '6126:8000'\n"  # the web app's port
-        "      - '7000-7002:9000-9002'\n      - '10000:8001'\n"  # a range Compose expands, and five digits
+        "      - '7000-7002:9000-9002'\n"  # a range Compose expands
+        "      - '7100-7102:9100'\n      - '10000:8001'\n"  # a range onto one port, and a port of five digits
         "    image: alpha_django\n    volumes:\n      - elsewhere:/elsewhere\n"  # one's image, and one's volume
         "volumes:\n  elsewhere:\n    external: true\n    name: alpha_uv-cache\n",  # which is not created by it
     )
     two.write(
-        "docker-compose.local.yml", "services:\n  django:\n    ports:\n      - '7002:8000'\n      - '10000:8000'\n"
+        "docker-compose.local.yml",
+        "services:\n  django:\n    ports:\n      - '7002:8000'\n      - '7101:8000'\n      - '10000:8000'\n",
     )
     everyone = (one, two, three, hand_set, web)
     before = sorted((str(p), p.stat().st_size) for r in everyone for p in r.root.rglob("*"))
@@ -78,6 +80,7 @@ def test_clashes_reports_each_value_two_checkouts_would_take_and_compares_ports_
         f"host port 6126: {named(hand_set, web)}",  # between the API's own, which the web app's port sits among
         *port_lines(1, names=API_PORTS[-1:], checkouts=(one, two)),
         f"host port 7002: {named(hand_set, two)}",  # the end of a range, sorted, though two is given before hand_set
+        f"host port 7101: {named(hand_set, two)}",  # inside a range published onto one container port
         f"host port 10000: {named(hand_set, two)}",
         f"Compose project alpha: {named(one, three)}",
         f"Compose project alpha-test: {named(one, three)}",
@@ -85,6 +88,7 @@ def test_clashes_reports_each_value_two_checkouts_would_take_and_compares_ports_
             f"image alpha_{service}: {named(*((hand_set,) if service == 'django' else ()), one, three)}"
             for service in ("celerybeat", "celeryworker", "django", "flower")
         ),
+        f"volume alpha-test_test_postgres_data: {named(one, three)}",
         f"volume alpha_local_postgres_data: {named(one, three)}",
         f"volume alpha_uv-cache: {named(one, three)}",
     ]
@@ -121,6 +125,9 @@ def test_clashes_exits_zero_for_a_clean_set_and_says_what_it_compared(checkout: 
         checkout("api_one", kind="api", name="api_one", slot=1),
         checkout("web_one", kind="web", name="web_one", slot=1),
     ]
+    for api, slot in ((repos[0], 0), (repos[2], 1)):  # one database name in two projects is no clash
+        env = f"PF_KITS=python django-api\nPF_SLOT={slot}\nPF_NAME={api.root.name}\nPF_POSTGRES_DB=shared\n"
+        api.write("productforge.env", env)
 
     result = run_config("clashes", *(r.root for r in repos))
 
@@ -145,12 +152,18 @@ def test_clashes_refuses_a_checkout_it_cannot_read_and_prints_nothing_else(
     unresolved = checkout("unresolved", kind="api", name="unresolved_api", slot=3, updated=False)  # no compose files
 
     missing = tmp_path / "missing"
+    a_file = tmp_path / "a_file"
+    a_file.write_text("")
+    unreadable = checkout("unreadable", kind="api", name="unreadable_api", slot=5)
+    (unreadable.root / "productforge.env").write_bytes(b"\xff\xfe")
     python_only = checkout("python_only", kind="api", name="python_only", slot=4)
     python_only.write("productforge.env", "PF_KITS=python\n")
     for refused, reason in (
         (bare, "has no productforge.env"),
         (python_only.root, "takes no product kit"),
         (missing, "is not a directory"),
+        (a_file, "is not a directory"),
+        (unreadable.root, "can't be read"),
         (invalid.root, "both"),
         (unresolved.root, "no such file"),
     ):

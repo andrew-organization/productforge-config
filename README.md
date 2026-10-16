@@ -239,17 +239,19 @@ reads each one's `productforge.env` and works out the `PF_` values its kit's
 makefile works out. For a checkout that takes `django-api` it runs
 `docker compose --env-file productforge.env -f .productforge/compose.yml
 --project-directory . config --format json` with them, adding `.env` and
-`docker-compose.local.yml` when the checkout has them, as `make up` does: a port
+`docker-compose.local.yml` when the checkout has them, as `make up` does (the
+integration tests' `.productforge/compose.test.yml` is resolved the same way, with
+`.env` and without the overlay, as `make test-integration` does): a port
 or name set in the overlay is seen, and `.env` is read as Compose reads it (the
 `PF_` values the makefile exports win over it). Nothing is started and nothing
 is written.
 
 | Value | Taken from | Clashes when |
 | --- | --- | --- |
-| Host port | an API's: each published port of its resolved compose model and the integration tests' Postgres port; a web app's, and an API's without Docker: the ports its kit uses in the slot's block | two checkouts publish the same port |
-| Compose project | `name` of the resolved model, and `<PF_NAME>-test` of the test project | two checkouts share a name |
+| Host port | an API's: each published port of its resolved compose model and of the integration tests' model; a web app's, and an API's without Docker: the ports its kit uses in the slot's block | two checkouts publish the same port |
+| Compose project | `name` of the resolved model, and of the integration tests' model | two checkouts share a name |
 | Image | each service's `image` that has a `build` key | two checkouts share a name |
-| Volume | each named volume's resolved name, an external volume excepted | two checkouts share a name |
+| Volume | each named volume's resolved name in either model, an external volume excepted | two checkouts share a name |
 
 A database is covered by its host port and its volume; two repositories with
 the same `PF_POSTGRES_DB` in different projects do not clash. Images pulled from
@@ -264,7 +266,7 @@ when there is any. With `--json` the clashes are printed as a list of
 `{"kind", "value", "checkouts"}` objects, and the line saying what was compared
 goes to the error output.
 
-It refuses, naming the checkout, printing nothing else and exiting 2, a path
+It refuses, naming the checkout, printing nothing else on standard output and exiting 2, a path
 that is not a directory, one given twice, a checkout with no `productforge.env`,
 one whose declaration is invalid or takes no product kit, and one whose compose
 model does not resolve, such as an API not yet brought up to a release, which
@@ -272,9 +274,6 @@ has no compose file. Without Docker on the path it compares host ports only,
 from the ports each kit uses in the slot's block, and says it did not resolve
 the compose models. One checkout, which has nothing to be compared with, is a
 usage error with exit status 2.
-
-The test project's name is `<PF_NAME>-test`, as `make test` names it when `.env`
-sets no project name; a `COMPOSE_PROJECT_NAME` in `.env` is not applied to it.
 
 ## Starting a repository: `init`
 

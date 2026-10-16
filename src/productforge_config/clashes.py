@@ -35,6 +35,7 @@ KIT_PORTS: dict[str, tuple[str, ...]] = {
 }
 
 COMPOSE_FILE = ".productforge/compose.yml"
+TEST_COMPOSE_FILE = ".productforge/compose.test.yml"
 OVERLAY_FILE = "docker-compose.local.yml"
 DOTENV_FILE = ".env"
 
@@ -111,6 +112,8 @@ def read_declaration(*, label: str, root: Path) -> kits.Declaration:
         raise ClashError(f"{label}: is not a directory")
     try:
         declaration = kits.read_env(root)
+    except (OSError, UnicodeDecodeError) as exc:
+        raise ClashError(f"{label}: {kits.ENV_FILE} can't be read: {exc}") from exc
     except kits.EnvError as exc:
         raise ClashError(f"{label}: {exc}") from exc
     if declaration is None:
@@ -135,13 +138,13 @@ def compose_environment(declaration: kits.Declaration) -> dict[str, str]:
     return values
 
 
-def resolve_compose(*, label: str, root: Path, declaration: kits.Declaration) -> dict:
-    """The compose model the checkout would start, resolved by Compose as `make up` would and started by nothing."""
+def resolve_compose(*, label: str, root: Path, declaration: kits.Declaration, test: bool) -> dict:
+    """The compose model `make up` would start, or with `test` the integration tests' one, resolved and not started."""
     command = ["docker", "compose", "--env-file", kits.ENV_FILE]
     if (root / DOTENV_FILE).exists():
         command += ["--env-file", DOTENV_FILE]
-    command += ["-f", COMPOSE_FILE]
-    if (root / OVERLAY_FILE).exists():
+    command += ["-f", TEST_COMPOSE_FILE if test else COMPOSE_FILE]
+    if not test and (root / OVERLAY_FILE).exists():
         command += ["-f", OVERLAY_FILE]
     command += ["--project-directory", ".", "config", "--format", "json"]
     result = subprocess.run(
@@ -164,13 +167,13 @@ def resolve_compose(*, label: str, root: Path, declaration: kits.Declaration) ->
 
 
 def published_ports(model: dict) -> set[int]:
-    """Every host port a service of the model publishes, which Compose resolves one to an entry, a range included."""
+    """Every host port a service of the model publishes, a range given as `first-last` included."""
     found: set[int] = set()
     for service in model.get("services", {}).values():
         for port in service.get("ports") or []:
-            published = str(port.get("published") or "")
-            if published.isdigit():
-                found.add(int(published))
+            first, _, last = str(port.get("published") or "").partition("-")
+            if first.isdigit() and (last or first).isdigit():
+                found.update(range(int(first), int(last or first) + 1))
     return found
 
 
@@ -181,13 +184,10 @@ def claims_from_slot(declaration: kits.Declaration) -> set[Claim]:
     return {Claim(PORT, str(block[name])) for name in KIT_PORTS[declaration.product_kit]}
 
 
-def claims_from_model(*, declaration: kits.Declaration, model: dict) -> set[Claim]:
-    """What an API's resolved compose model, and its test project, would take."""
-    assert declaration.slot is not None
+def claims_from_model(model: dict) -> set[Claim]:
+    """What a resolved compose model would take: its published ports, project, built images and own volumes."""
     claims = {Claim(PORT, str(port)) for port in published_ports(model)}
-    claims.add(Claim(PORT, str(ports.ports_for(declaration.slot)["TEST_POSTGRES"])))
     claims.add(Claim(PROJECT, str(model["name"])))
-    claims.add(Claim(PROJECT, f"{declaration.name}-test"))
     for service in model.get("services", {}).values():
         if service.get("build") and service.get("image"):
             claims.add(Claim(IMAGE, service["image"]))
@@ -201,8 +201,9 @@ def read_checkout(*, label: str, resolve: bool, root: Path) -> Checkout:
     """What the checkout would take, resolving its compose model when `resolve` and it is an API."""
     declaration = read_declaration(label=label, root=root)
     if resolve and declaration.product_kit == "django-api":
-        model = resolve_compose(label=label, root=root, declaration=declaration)
-        claims = claims_from_model(declaration=declaration, model=model)
+        claims = set()
+        for test in (False, True):
+            claims |= claims_from_model(resolve_compose(label=label, root=root, declaration=declaration, test=test))
     else:
         claims = claims_from_slot(declaration)
     return Checkout(label, declaration, frozenset(claims))
