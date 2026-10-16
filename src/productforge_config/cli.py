@@ -35,7 +35,7 @@ rights on the target.
 `productforge-config clashes <checkout> <checkout> [...] [--json]` reports each host
 port, Compose project, built image and volume that two or more checkouts would take at
 once, resolving an API's compose model without starting anything, and exits 1 when
-there is any (see clashes.py).
+there is any and 2 when a checkout is refused (see clashes.py).
 
 `productforge-config usage --org ORG [--allowance MINUTES] [--from-day DAY]`
 prints one line of the month's Actions minutes against the allowance and

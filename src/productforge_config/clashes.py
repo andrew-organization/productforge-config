@@ -4,8 +4,8 @@
 works out the `PF_` values its kit's makefile works out, and, for an API, has Docker Compose resolve
 the compose model the checkout would start (`docker compose config`, which starts nothing). It then
 reports every host port, Compose project, built image and named volume that two or more checkouts
-would both take, naming the checkouts, whether they are two products or one product's own API and web
-app. It writes nothing and starts nothing.
+would both take, naming the checkouts, whether they belong to two products or to one product's own API
+and web app. It writes nothing and starts nothing.
 
 Without Docker it compares host ports only, from the ports each kit uses in the slot's block, and
 says so. Images pulled from a registry, which projects share, are not compared.
@@ -155,20 +155,22 @@ def resolve_compose(*, label: str, root: Path, declaration: kits.Declaration) ->
         detail = result.stderr.strip() or "docker compose config failed"
         raise ClashError(f"{label}: its compose model does not resolve: {detail}")
     try:
-        return json.loads(result.stdout)
+        model = json.loads(result.stdout)
     except json.JSONDecodeError as exc:
         raise ClashError(f"{label}: its compose model does not resolve: {exc}") from exc
+    if not isinstance(model, dict) or "name" not in model:
+        raise ClashError(f"{label}: its compose model does not resolve: it names no project")
+    return model
 
 
 def published_ports(model: dict) -> set[int]:
-    """Every host port a service of the model publishes, a range given as `first-last` included."""
+    """Every host port a service of the model publishes, which Compose resolves one to an entry, a range included."""
     found: set[int] = set()
     for service in model.get("services", {}).values():
         for port in service.get("ports") or []:
             published = str(port.get("published") or "")
-            first, _, last = published.partition("-")
-            if first.isdigit():
-                found.update(range(int(first), int(last or first) + 1))
+            if published.isdigit():
+                found.add(int(published))
     return found
 
 

@@ -56,8 +56,9 @@ def test_clashes_reports_each_value_two_checkouts_would_take_and_compares_ports_
     hand_set.write(
         "docker-compose.local.yml",
         "services:\n  django:\n    ports:\n      - '6126:8000'\n"  # the web app's port
-        "      - '7000-7002:9000-9002'\n      - '10000:8001'\n"  # a range, and a port of five digits
-        "volumes:\n  elsewhere:\n    external: true\n    name: alpha_uv-cache\n",  # one's, but not created by it
+        "      - '7000-7002:9000-9002'\n      - '10000:8001'\n"  # a range Compose expands, and five digits
+        "    image: alpha_django\n    volumes:\n      - elsewhere:/elsewhere\n"  # one's image, and one's volume
+        "volumes:\n  elsewhere:\n    external: true\n    name: alpha_uv-cache\n",  # which is not created by it
     )
     two.write(
         "docker-compose.local.yml", "services:\n  django:\n    ports:\n      - '7002:8000'\n      - '10000:8000'\n"
@@ -76,12 +77,12 @@ def test_clashes_reports_each_value_two_checkouts_would_take_and_compares_ports_
         *port_lines(1, names=API_PORTS[:-1], checkouts=(one, two)),
         f"host port 6126: {named(hand_set, web)}",  # between the API's own, which the web app's port sits among
         *port_lines(1, names=API_PORTS[-1:], checkouts=(one, two)),
-        f"host port 7002: {named(hand_set, two)}",  # the end of a range, named in order, though given as two, hand_set
+        f"host port 7002: {named(hand_set, two)}",  # the end of a range, sorted, though two is given before hand_set
         f"host port 10000: {named(hand_set, two)}",
         f"Compose project alpha: {named(one, three)}",
         f"Compose project alpha-test: {named(one, three)}",
         *(
-            f"image alpha_{service}: {named(one, three)}"
+            f"image alpha_{service}: {named(*((hand_set,) if service == 'django' else ()), one, three)}"
             for service in ("celerybeat", "celeryworker", "django", "flower")
         ),
         f"volume alpha_local_postgres_data: {named(one, three)}",
@@ -151,7 +152,7 @@ def test_clashes_refuses_a_checkout_it_cannot_read_and_prints_nothing_else(
         (python_only.root, "takes no product kit"),
         (missing, "is not a directory"),
         (invalid.root, "both"),
-        (unresolved.root, "resolve"),
+        (unresolved.root, "no such file"),
     ):
         before = sorted(refused.rglob("*"))
 
@@ -160,7 +161,8 @@ def test_clashes_refuses_a_checkout_it_cannot_read_and_prints_nothing_else(
         assert result.returncode == 2 and result.stdout == "", reason
         assert result.stderr.startswith(f"productforge-config: {refused}: ") and reason in result.stderr, reason
         assert sorted(refused.rglob("*")) == before, reason
-    assert "two or more" in run_config("clashes", good.root).stderr
+    alone = run_config("clashes", good.root)
+    assert (alone.returncode, alone.stdout) == (2, "") and "two or more" in alone.stderr
     spellings = [f"{good.root}/", f"{good.root}/../{good.root.name}"]
     if Path(str(good.root).swapcase()).exists():  # a case-insensitive file system
         spellings.append(str(good.root).swapcase())

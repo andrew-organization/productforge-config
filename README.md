@@ -258,7 +258,7 @@ a registry, which several projects share, are not compared.
 Each clash is one line, `<kind> <value>: <checkout>, <checkout>`, the kind being
 `host port`, `Compose project`, `image` or `volume`, in that order and the ports
 in numeric order, with the
-checkouts named as given and in alphabetical order, then one line saying what was compared and the host
+checkouts named as given and sorted, then one line saying what was compared and the host
 ports each checkout takes. The exit status is 0 when there is no clash and 1
 when there is any. With `--json` the clashes are printed as a list of
 `{"kind", "value", "checkouts"}` objects, and the line saying what was compared
@@ -270,7 +270,11 @@ one whose declaration is invalid or takes no product kit, and one whose compose
 model does not resolve, such as an API not yet brought up to a release, which
 has no compose file. Without Docker on the path it compares host ports only,
 from the ports each kit uses in the slot's block, and says it did not resolve
-the compose models.
+the compose models. One checkout, which has nothing to be compared with, is a
+usage error with exit status 2.
+
+The test project's name is `<PF_NAME>-test`, as `make test` names it when `.env`
+sets no project name; a `COMPOSE_PROJECT_NAME` in `.env` is not applied to it.
 
 ## Starting a repository: `init`
 
