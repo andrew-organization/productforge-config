@@ -231,8 +231,8 @@ uvx --from git+https://github.com/andrew-organization/productforge-config@v1.0.0
 
 With no `--kind`, the declaration is the repository's own `productforge.env`
 `PF_KITS`, every kit unchanged (a declared `release` survives `init` and a
-later `update`), with `PF_NAME` and `PF_SLOT` set; a repository copied from a
-template keeps what its template declares. A repository with no
+later `update`), with `PF_NAME` and `PF_SLOT` set; no other value of the
+file is kept. A repository with no
 `productforge.env`, or whose kits name neither `django-api` nor `flutter-web`
 (both is refused as it always is), is refused naming the file, and nothing is
 written. Given `--kind`, `init` writes that kind's kits, as before.
