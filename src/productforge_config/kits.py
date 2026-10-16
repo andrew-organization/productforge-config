@@ -209,6 +209,19 @@ def for_kind(kind: str, slot: str | int, name: str) -> Declaration:
     return validate(KIND_KITS[kind], slot, name)
 
 
+def for_copy(root: Path, slot: str | int, name: str) -> Declaration:
+    """The declaration `init` writes with no `--kind`: the repository's own kits, with the new slot and name."""
+    path = root / ENV_FILE
+    current = read_env(root)
+    if current is None:
+        raise EnvError(f"{path} is missing: with no --kind, init takes the kits from it")
+    if current.product_kit is None:
+        raise EnvError(
+            f"{path}: PF_KITS names neither {' nor '.join(PRODUCT_KITS)}: with no --kind, init needs one of them"
+        )
+    return validate(current.kits, slot, name)
+
+
 def read_env(root: Path) -> Declaration | None:
     """The repository's declaration, or None when it has no productforge.env."""
     path = root / ENV_FILE
