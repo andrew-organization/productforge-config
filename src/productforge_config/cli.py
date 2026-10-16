@@ -173,7 +173,8 @@ def _latest_release_tag() -> str:
         detail = (getattr(exc, "stderr", None) or str(exc)).strip()
         raise InvalidVersion(
             f"couldn't list the release tags at {HOOK_SOURCE} ({detail}); "
-            "check the connection, or pass an explicit --version"
+            "check the connection and this machine's Git credentials (productforge-config is read through git), "
+            "or pass an explicit --version"
         ) from exc
     stable, prerelease = _parse_release_tags(result.stdout)
     if stable:

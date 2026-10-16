@@ -49,3 +49,10 @@ allows that origin.
 this kind (`ci-api.yml` or `ci-web.yml`) on every pull request. It reads
 `productforge.env` and runs the same make targets a developer runs, so a
 failure in CI reproduces locally with the same command.
+
+The checks read productforge-config with the organisation's read token,
+`PF_READ_TOKEN`, which `ci.yml` passes to the reusable workflow as
+`secrets: PF_READ_TOKEN: ${{ secrets.PF_READ_TOKEN }}`. A job that stops at
+its first step naming `PF_READ_TOKEN` is missing that line or the
+organisation secret; on this machine, `make update-config` and `make
+check-config` read it through `git` with your own credentials.

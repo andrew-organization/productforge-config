@@ -52,12 +52,12 @@ clean:
 # ─── productforge-config ────────────────────────────────────────────────────
 
 # The newest stable release tag, or the newest -rc.N when no stable release exists yet; looked up only when a recipe reads it.
-VERSION ?= $(shell tags=$$(git ls-remote --tags --refs $(PF_CONFIG_URL) 2>/dev/null | sed 's,.*refs/tags/,,'); v=$$(echo "$$tags" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$$' | sort -V | tail -n1); [ -n "$$v" ] || v=$$(echo "$$tags" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$$' | sort -V | tail -n1); echo "$$v")
+VERSION ?= $(shell tags=$$(git ls-remote --tags --refs $(PF_CONFIG_URL) | sed 's,.*refs/tags/,,'); v=$$(echo "$$tags" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$$' | sort -V | tail -n1); [ -n "$$v" ] || v=$$(echo "$$tags" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$$' | sort -V | tail -n1); echo "$$v")
 
 ## Bring this repository up to a productforge-config release: its kits, hooks, CI and shared settings.
 ## Usage: make update-config [VERSION=<tag or commit SHA>]
 update-config:
-	@test -n "$(VERSION)" || { echo "update-config: no productforge-config release tag found" >&2; exit 1; }
+	@test -n "$(VERSION)" || { echo "update-config: no productforge-config release tag found (if the tags could not be listed, check this machine's Git credentials: productforge-config is read through git)" >&2; exit 1; }
 	uvx --from git+$(PF_CONFIG_URL)@$(VERSION) productforge-config update --version $(VERSION)
 
 ## Fail when a file productforge-config writes has changed by hand, or a release left one unwritten,

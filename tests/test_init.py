@@ -79,6 +79,7 @@ def test_init_writes_the_declaration_the_thin_files_and_the_kit(tmp_path: Path, 
     assert "the old, full Makefile" not in makefile and "update-config" not in makefile  # common.mk carries the recipe
     ci = (tmp_path / ".github" / "workflows" / "ci.yml").read_text()
     assert f"uses: andrew-organization/productforge-config/.github/workflows/ci-api.yml@{VERSION}" in ci
+    assert "    secrets:\n      PF_READ_TOKEN: ${{ secrets.PF_READ_TOKEN }}\n" in ci  # explicit, never inherit
     assert "pull_request:" in ci and "push:\n    branches:\n      - main" in ci
     assert "group: ci-${{ github.event.pull_request.number || github.ref }}" in ci
     assert "cancel-in-progress: ${{ github.event_name == 'pull_request' }}" in ci

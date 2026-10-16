@@ -25,7 +25,8 @@ repository is brought up to a release by one command, run in it.
 - `actions/setup/action.yml` — the CI setup every repository repeats, written
   once: uv with the Python `settings/python.toml` states and its cache, the
   pre-commit cache keyed on the caller's hook files, and `make install` — with
-  Flutter as an option (`flutter: true`).
+  Flutter as an option (`flutter: true`) and the read token as another
+  (`token:`, see "The read token").
 - `.github/workflows/ci-api.yml`, `.github/workflows/ci-web.yml` — the
   reusable CI workflows for an API and a web repository (see "Reusable CI
   workflows"), and `.github/workflows/release.yml`, the reusable release.
@@ -267,6 +268,8 @@ jobs:
     uses: andrew-organization/productforge-config/.github/workflows/ci-api.yml@v1.0.0
     permissions:
       contents: read
+    secrets:
+      PF_READ_TOKEN: ${{ secrets.PF_READ_TOKEN }}
 ```
 
 The push trigger runs the workflow on `main` after every merge, so the caches it
@@ -286,6 +289,39 @@ this repository out at the commit it runs from (`job.workflow_repository` at
 `job.workflow_sha`, into an untracked `.productforge-config/`) and calls
 `actions/setup` from there. `parallel:` steps run inside a reusable workflow as
 they do in a caller's own job.
+
+### The read token
+
+A workspace whose productforge-config is private reads it with one read-only
+token, the organisation secret `PF_READ_TOKEN`. A caller passes it by name,
+never with `secrets: inherit`: to the reusable workflows as `secrets:
+PF_READ_TOKEN`, and to `actions/setup` called directly as its `token` input.
+
+```yaml
+- uses: andrew-organization/productforge-config/actions/setup@v1.0.0
+  with:
+    token: ${{ secrets.PF_READ_TOKEN }}
+```
+
+| Form | Behaviour |
+| --- | --- |
+| Token given | Every later Git read of the repository owner's repositories in the job authenticates with it. |
+| No token, config public | Reads anonymously, as before. |
+| No token, config private | The job stops at its first step, naming `PF_READ_TOKEN`. |
+| A token the owner's repositories reject | The first Git read fails with git's own message. |
+
+The token reaches Git through the job's environment alone (`GIT_CONFIG_COUNT`
+and `GIT_CONFIG_KEY_n`/`GIT_CONFIG_VALUE_n`, an `http.<owner URL>.extraheader`
+entry exported to the later steps), and is masked in the log. No `.gitconfig`
+and no checkout's `.git/config` ever holds it, so a persistent runner keeps
+nothing between jobs. This repository's own CI proves it on every pull request:
+`git config --list --show-origin` shows the entry from `command line:` only,
+and no Git configuration file contains it.
+
+On a person's own machine nothing uses the token: `make update-config`, `make
+check-config`, `productforge-config update` and `init` read through `git` with
+that person's own credentials, and name missing credentials as the likely
+cause when they cannot list the release tags.
 
 ### The runner switch
 

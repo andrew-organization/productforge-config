@@ -11,10 +11,42 @@ inputs:
       Set up Flutter from the caller's own .fvmrc before installing.
     required: false
     default: "false"
+  token:
+    description: >-
+      The read token for the workspace's private shared projects (the organisation secret
+      PF_READ_TOKEN). Given, every Git read of the repository owner's repositories for the rest of the
+      job authenticates with it, held only in the job's environment and masked in the log. Empty,
+      nothing changes.
+    required: false
+    default: ""
 
 runs:
   using: composite
   steps:
+    # A caller that gives no token reads this repository anonymously, so a private one is named here, at the
+    # first step that needs it, and not by a Git error deep in an install. A local `./actions/setup` has no
+    # repository of its own to look up: its caller's workflow made this check before it checked the action out.
+    - name: Check this repository can be read
+      if: inputs.token == '' && github.action_repository != ''
+      shell: bash
+      env:
+        ACTION_REPOSITORY: ${{ github.action_repository }}
+      run: |
+        if ! GIT_TERMINAL_PROMPT=0 git ls-remote "https://github.com/${ACTION_REPOSITORY}" HEAD > /dev/null 2>&1; then
+          echo "::error::${ACTION_REPOSITORY} can't be read without a token:" \
+            "give this action's token input the organisation secret PF_READ_TOKEN."
+          exit 1
+        fi
+
+    # Held in the job's environment as Git configuration, never in a file: no .gitconfig and no checkout's
+    # .git/config ever holds the token, and the job's end discards it wherever the job ran.
+    - name: Authenticate Git reads with the token
+      if: inputs.token != ''
+      shell: bash
+      env:
+        PF_TOKEN: ${{ inputs.token }}
+      run: bash "$GITHUB_ACTION_PATH/git_credential.sh"
+
     # The Python this release of productforge-config states in settings/python.toml, read from the
     # action's own checkout, so a release moves every repository's Python by moving one value.
     - name: Read the Python version

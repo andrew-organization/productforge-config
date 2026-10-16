@@ -21,3 +21,5 @@ jobs:
     uses: andrew-organization/productforge-config/.github/workflows/ci-__KIND__.yml@__VERSION__
     permissions:
       contents: read
+    secrets:
+      PF_READ_TOKEN: ${{ secrets.PF_READ_TOKEN }}
