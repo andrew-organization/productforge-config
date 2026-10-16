@@ -246,28 +246,31 @@ is written.
 
 | Value | Taken from | Clashes when |
 | --- | --- | --- |
-| Host port | each published port of the resolved compose model, the integration tests' Postgres port, and the web app's port | two checkouts publish the same port |
+| Host port | an API's: each published port of its resolved compose model and the integration tests' Postgres port; a web app's, and an API's without Docker: the ports its kit uses in the slot's block | two checkouts publish the same port |
 | Compose project | `name` of the resolved model, and `<PF_NAME>-test` of the test project | two checkouts share a name |
 | Image | each service's `image` that has a `build` key | two checkouts share a name |
-| Volume | each named volume's resolved name | two checkouts share a name |
+| Volume | each named volume's resolved name, an external volume excepted | two checkouts share a name |
 
 A database is covered by its host port and its volume; two repositories with
 the same `PF_POSTGRES_DB` in different projects do not clash. Images pulled from
 a registry, which several projects share, are not compared.
 
-Each clash is one line, `<kind> <value>: <checkout>, <checkout>`, with the
-checkouts named as given, then one line saying what was compared and the host
+Each clash is one line, `<kind> <value>: <checkout>, <checkout>`, the kind being
+`host port`, `Compose project`, `image` or `volume`, in that order and the ports
+in numeric order, with the
+checkouts named as given and in alphabetical order, then one line saying what was compared and the host
 ports each checkout takes. The exit status is 0 when there is no clash and 1
 when there is any. With `--json` the clashes are printed as a list of
 `{"kind", "value", "checkouts"}` objects, and the line saying what was compared
 goes to the error output.
 
-It refuses, naming the checkout, printing nothing else and exiting 2, a path that
-is not a directory, one given twice, a checkout with no `productforge.env`, one whose declaration is invalid or takes no product
-kit, and one whose compose model does not resolve, such as an API not yet
-brought up to a release, which has no compose file. Without Docker on the path
-it compares host ports only, from the ports each kit uses in the slot's block,
-and says it did not resolve the compose models.
+It refuses, naming the checkout, printing nothing else and exiting 2, a path
+that is not a directory, one given twice, a checkout with no `productforge.env`,
+one whose declaration is invalid or takes no product kit, and one whose compose
+model does not resolve, such as an API not yet brought up to a release, which
+has no compose file. Without Docker on the path it compares host ports only,
+from the ports each kit uses in the slot's block, and says it did not resolve
+the compose models.
 
 ## Starting a repository: `init`
 

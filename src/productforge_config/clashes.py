@@ -86,14 +86,23 @@ def docker_compose_available() -> bool:
     return subprocess.run(["docker", "compose", "version"], capture_output=True).returncode == 0
 
 
+def _same_path(one: str, other: str) -> bool:
+    """Whether two spellings name one directory, whatever the case, links or dots in them."""
+    try:
+        return os.path.samefile(one, other)
+    except OSError:
+        return False
+
+
 def refuse_repeats(given: list[str]) -> None:
     """A ClashError naming a checkout given more than once, which would clash with itself on every value."""
-    seen: dict[Path, str] = {}
+    seen: list[str] = []
     for label in given:
-        resolved = Path(label).resolve()
-        if resolved in seen:
-            raise ClashError(f"{label}: given twice, as {seen[resolved]} and as {label}")
-        seen[resolved] = label
+        same = next((earlier for earlier in seen if _same_path(earlier, label)), None)
+        if same is not None:
+            spelled = f"as {same} and as {label}" if same != label else "as the same path"
+            raise ClashError(f"{label}: given twice, {spelled}")
+        seen.append(label)
 
 
 def read_declaration(*, label: str, root: Path) -> kits.Declaration:

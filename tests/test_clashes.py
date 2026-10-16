@@ -54,18 +54,30 @@ def test_clashes_reports_each_value_two_checkouts_would_take_and_compares_ports_
     hand_set = checkout("hand_set", kind="api", name="delta", slot=4)
     web = checkout("web", kind="web", name="web_one", slot=1)  # one's slot, which an API and its web app share
     hand_set.write(
-        "docker-compose.local.yml", "services:\n  django:\n    ports:\n      - '6126:8000'\n"  # the web app's port
+        "docker-compose.local.yml",
+        "services:\n  django:\n    ports:\n      - '6126:8000'\n"  # the web app's port
+        "      - '7000-7002:9000-9002'\n      - '10000:8001'\n"  # a range, and a port of five digits
+        "volumes:\n  elsewhere:\n    external: true\n    name: alpha_uv-cache\n",  # one's, but not created by it
+    )
+    two.write(
+        "docker-compose.local.yml", "services:\n  django:\n    ports:\n      - '7002:8000'\n      - '10000:8000'\n"
     )
     everyone = (one, two, three, hand_set, web)
-    named = lambda *repos: ", ".join(str(r.root) for r in repos)  # noqa: E731
+    before = sorted((str(p), p.stat().st_size) for r in everyone for p in r.root.rglob("*"))
+
+    def named(*repos: Repo) -> str:
+        return ", ".join(str(r.root) for r in repos)
 
     result = run_config("clashes", *(r.root for r in everyone))
 
     assert result.returncode == 1 and result.stderr == ""
+    assert before == sorted((str(p), p.stat().st_size) for r in everyone for p in r.root.rglob("*"))
     assert result.stdout.splitlines()[:-1] == [
         *port_lines(1, names=API_PORTS[:-1], checkouts=(one, two)),
         f"host port 6126: {named(hand_set, web)}",  # between the API's own, which the web app's port sits among
         *port_lines(1, names=API_PORTS[-1:], checkouts=(one, two)),
+        f"host port 7002: {named(hand_set, two)}",  # the end of a range, named in order, though given as two, hand_set
+        f"host port 10000: {named(hand_set, two)}",
         f"Compose project alpha: {named(one, three)}",
         f"Compose project alpha-test: {named(one, three)}",
         *(
@@ -80,10 +92,15 @@ def test_clashes_reports_each_value_two_checkouts_would_take_and_compares_ports_
     assert f"{web.root} (6126)" in compared and f"{one.root} (6120 6121 6122 6123 6124 6125 6131)" in compared
 
     as_list = run_config("clashes", *(r.root for r in everyone), "--json")
-    assert as_list.returncode == 1
+    assert as_list.returncode == 1 and as_list.stderr.rstrip("\n") == compared
     assert [
         f"{c['kind']} {c['value']}: {', '.join(c['checkouts'])}" for c in json.loads(as_list.stdout)
     ] == result.stdout.splitlines()[:-1]
+
+    monkeypatch.chdir(tmp_path)
+    relative = run_config("clashes", "one", "./two")
+    assert relative.stdout.splitlines()[0] == "host port 6120: ./two, one"
+    assert "one (6120" in relative.stdout.splitlines()[-1]
 
     nothing_on_path = tmp_path / "nothing_on_path"
     nothing_on_path.mkdir()
@@ -127,8 +144,11 @@ def test_clashes_refuses_a_checkout_it_cannot_read_and_prints_nothing_else(
     unresolved = checkout("unresolved", kind="api", name="unresolved_api", slot=3, updated=False)  # no compose files
 
     missing = tmp_path / "missing"
+    python_only = checkout("python_only", kind="api", name="python_only", slot=4)
+    python_only.write("productforge.env", "PF_KITS=python\n")
     for refused, reason in (
         (bare, "has no productforge.env"),
+        (python_only.root, "takes no product kit"),
         (missing, "is not a directory"),
         (invalid.root, "both"),
         (unresolved.root, "resolve"),
@@ -141,16 +161,21 @@ def test_clashes_refuses_a_checkout_it_cannot_read_and_prints_nothing_else(
         assert result.stderr.startswith(f"productforge-config: {refused}: ") and reason in result.stderr, reason
         assert sorted(refused.rglob("*")) == before, reason
     assert "two or more" in run_config("clashes", good.root).stderr
-    repeated = run_config("clashes", good.root, f"{good.root}/")
-    assert repeated.returncode == 2 and repeated.stdout == "" and "given twice" in repeated.stderr
+    spellings = [f"{good.root}/", f"{good.root}/../{good.root.name}"]
+    if Path(str(good.root).swapcase()).exists():  # a case-insensitive file system
+        spellings.append(str(good.root).swapcase())
+    for spelling in spellings:
+        repeated = run_config("clashes", good.root, spelling)
+        assert repeated.returncode == 2 and repeated.stdout == "" and "given twice" in repeated.stderr, spelling
 
 
 @pytest.mark.usefixtures("compose")
 def test_clashes_reads_the_checkouts_dotenv_as_make_up_does(checkout: Callable[..., Repo]) -> None:
     one = checkout("one", kind="api", name="alpha", slot=1)
     two = checkout("two", kind="api", name="beta", slot=2)
-    two.write(".env", "COMPOSE_PROJECT_NAME=alpha\n")  # a project name the file sets, which is one's
+    two.write(".env", "COMPOSE_PROJECT_NAME=alpha\nPF_PORT_API=6120\n")  # one's project name, and one's port
 
     result = run_config("clashes", one.root, two.root)
 
     assert result.returncode == 1 and f"Compose project alpha: {one.root}, {two.root}" in result.stdout
+    assert "host port 6120" not in result.stdout  # the makefile's PF_ values win over the file
