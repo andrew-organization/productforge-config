@@ -205,6 +205,8 @@ def test_the_reusable_workflows_take_the_optional_token_read_config_with_it_and_
         assert secret["required"] is False
         assert checkout["with"]["token"] == "${{ secrets.PF_READ_TOKEN || github.token }}"
         assert checkout["with"]["persist-credentials"] is False
+        # The caller's own checkout leaves no header of its own, which Git would send beside the token's.
+        assert job_steps[0]["with"]["persist-credentials"] is False
         assert names.index("Check productforge-config can be read") < job_steps.index(checkout)
         assert "inherit" not in (shipped / ".github" / "workflows" / f"ci-{kind}.yml").read_text().replace(
             "`secrets: inherit`", ""

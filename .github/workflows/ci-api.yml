@@ -36,6 +36,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The token's header is the only one Git sends for this owner's repositories.
+          persist-credentials: false
 
       # With no token, a private productforge-config is named here, at the first step that needs it.
       - name: Check productforge-config can be read

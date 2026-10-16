@@ -316,12 +316,18 @@ entry exported to the later steps), and is masked in the log. No `.gitconfig`
 and no checkout's `.git/config` ever holds it, so a persistent runner keeps
 nothing between jobs. This repository's own CI proves it on every pull request:
 `git config --list --show-origin` shows the entry from `command line:` only,
-and no Git configuration file contains it.
+and no Git configuration file contains it. Every later step of the job can read
+the entry, as it can any secret given through the environment, so the setup
+step comes after the job's own checkouts, which use `persist-credentials:
+false`: Git would otherwise send the checkout's own header beside the token's,
+and GitHub rejects a request with two. The header is sent only to repositories
+of the repository's own owner.
 
-On a person's own machine nothing uses the token: `make update-config`, `make
-check-config`, `productforge-config update` and `init` read through `git` with
-that person's own credentials, and name missing credentials as the likely
-cause when they cannot list the release tags.
+On a person's own machine nothing uses the token: `make update-config`,
+`make check-config`, `productforge-config update` and `init` read through
+`git` with that person's own credentials, and `update-config`, `update` and
+`init` name missing credentials as the likely cause when they cannot list the
+release tags.
 
 ### The runner switch
 

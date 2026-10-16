@@ -195,6 +195,7 @@ def test_update_config_takes_a_tag_or_a_commit_else_the_newest_release_and_check
     stubs.add("git", stdout=git_tags(["not-a-release"]))
     result = api.make("update-config")
     assert result.returncode != 0 and "no productforge-config release tag found" in result.stderr
+    assert "Git credentials" in result.stderr
     checking = api.dry("check-config")
     assert "update --check --version $release" in checking and ".productforge/release" in checking
 
