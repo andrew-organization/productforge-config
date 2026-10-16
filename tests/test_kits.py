@@ -74,6 +74,7 @@ def test_update_installs_the_api_kit_whole(api_repo: Repo) -> None:
     assert api_repo.read(".productforge/release") == f"{VERSION}\n"
     claude = api_repo.read(".productforge/CLAUDE.md")
     assert "## Ports" in claude and "## CI" in claude and "## API targets" in claude and "## Web targets" not in claude
+    assert "PF_READ_TOKEN" in claude and "make update-config" in claude  # the paragraph on the read token
     assert "\n\n\n" not in claude and "\n\n## API targets" in claude  # fragments join without stray blank lines
     assert "`make ports`" in claude and all(
         name in claude for name in ("DJANGO_ALLOWED_HOSTS", "CORS_EXTRA_ORIGINS", "FRONTEND_BASE_URL")
@@ -108,7 +109,7 @@ def test_update_installs_the_web_kit_whole(web_repo: Repo, shipped: Path) -> Non
     assert lines[0] == "#!/usr/bin/env python3" and lines[1].startswith("# Installed by productforge-config")
     claude = web_repo.read(".productforge/CLAUDE.md")
     assert "## Ports" in claude and "## CI" in claude and "## Web targets" in claude and "## API targets" not in claude
-    assert "`make ports`" in claude
+    assert "`make ports`" in claude and "PF_READ_TOKEN" in claude
     assert json.loads(web_repo.read(".fvmrc")) == {
         "flutter": json.loads((shipped / "settings" / "fvmrc").read_text())["flutter"]
     }

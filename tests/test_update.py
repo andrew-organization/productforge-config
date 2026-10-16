@@ -142,6 +142,7 @@ def test_update_without_a_version_takes_the_newest_stable_tag_else_the_newest_re
     [
         ("fails", "offline"),
         ("is missing", "couldn't list the release tags"),
+        ("fails", "Git credentials"),
         ("lists nothing", "no release tags found"),
     ],
 )

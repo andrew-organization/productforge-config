@@ -27,8 +27,18 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - uses: ./actions/setup
+        with:
+          token: ${{ secrets.PF_READ_TOKEN }}
+
+      # The token reaches Git through the job's environment alone: no Git configuration file holds it.
+      - name: Token is held only by the environment
+        env:
+          PF_TOKEN: ${{ secrets.PF_READ_TOKEN }}
+        run: .github/scripts/check_token_scope.sh
 
       - parallel:
           - name: Lint
@@ -40,3 +50,28 @@ jobs:
           # The files this repository's own update writes, unchanged since the release in .productforge/release.
           - name: Config unchanged
             run: make check-config
+
+  # The credential step on a placeholder, so the proof that no Git configuration file holds a token runs on
+  # every pull request, with or without the real secret.
+  token-scope:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Authenticate Git reads with a placeholder token
+        env:
+          PF_TOKEN: placeholder-not-a-token-0123456789
+        run: actions/setup/git_credential.sh
+
+      - name: Token is held only by the environment
+        env:
+          PF_TOKEN: placeholder-not-a-token-0123456789
+        run: .github/scripts/check_token_scope.sh
+
+      - name: The placeholder is masked in the log
+        env:
+          PF_TOKEN: placeholder-not-a-token-0123456789
+        run: echo "value=${PF_TOKEN}"
