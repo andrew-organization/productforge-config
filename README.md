@@ -310,7 +310,7 @@ PF_READ_TOKEN`, and to `actions/setup` called directly as its `token` input.
 | --- | --- |
 | Token given | Every later Git read of the repository owner's repositories in the job authenticates with it. |
 | No token, config public | Reads anonymously, as before. |
-| No token, config private | The job stops at its first step, naming `PF_READ_TOKEN`. |
+| No token, config private | The job stops at the first step that needs config, naming `PF_READ_TOKEN`. |
 | A token the owner's repositories reject | The first Git read fails with git's own message. |
 
 The token reaches Git through the job's environment alone (`GIT_CONFIG_COUNT`
@@ -320,12 +320,13 @@ and no checkout's `.git/config` ever holds it, so a persistent runner keeps
 nothing between jobs. This repository's own CI proves it on every pull request:
 `git config --list --show-origin` shows the entry from `command line:` only,
 and no Git configuration file contains it. Every later step of the job can read
-the entry, as it can any secret given through the environment, so the setup
-step runs once per job, after the job's own checkouts, which use
+the entry, as it can any secret given through the environment.
+
+The setup step runs once per job, after the job's own checkouts, which use
 `persist-credentials: false`, and no checkout of the owner's repositories runs
 after it: Git would otherwise send that checkout's own header beside the
-token's, and GitHub rejects a request with two. The header is sent only to repositories
-of the repository's own owner.
+token's, and GitHub rejects a request with two. The header is sent to every
+repository of the repository's own owner, the caller's own included.
 
 On a person's own machine nothing uses the token: `make update-config`,
 `make check-config`, `productforge-config update` and `init` read through

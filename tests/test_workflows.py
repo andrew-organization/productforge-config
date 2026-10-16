@@ -311,3 +311,12 @@ def test_the_setup_holds_the_token_in_the_environment_alone_masked_and_in_no_git
         str(shipped / ".github" / "scripts" / "check_token_scope.sh"), tmp_path, **{**exported, "PF_TOKEN": TOKEN}
     )
     assert leaked.returncode == 1  # a file holding it is caught
+
+    # The other branches of the two scripts: no token set, an empty token given, the raw token in a file.
+    script = str(shipped / ".github" / "scripts" / "check_token_scope.sh")
+    skipped = run_shell(script, tmp_path, **{**exported, "PF_TOKEN": ""})
+    assert skipped.returncode == 0 and "no token set" in skipped.stdout
+    assert run_shell(str(action / "git_credential.sh"), tmp_path, **{**env, "PF_TOKEN": ""}).returncode != 0
+    (tmp_path / "home" / ".gitconfig").write_text(f"[http]\n\textraHeader = {TOKEN}\n")
+    raw = run_shell(script, tmp_path, **{**exported, "PF_TOKEN": TOKEN})
+    assert raw.returncode == 1
