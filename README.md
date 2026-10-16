@@ -309,7 +309,7 @@ PF_READ_TOKEN`, and to `actions/setup` called directly as its `token` input.
 | Form | Behaviour |
 | --- | --- |
 | Token given | Every later Git read of the repository owner's repositories in the job authenticates with it. |
-| No token, config public | Reads anonymously, as before. |
+| No token, config public | Reads anonymously, as before. The release workflow is the exception: it refuses a caller with no token, naming `PF_READ_TOKEN`, whether config is public or private. |
 | No token, config private | The job stops at the first step that needs config, naming `PF_READ_TOKEN`. |
 | A token the owner's repositories reject | The first Git read fails with git's own message. |
 
@@ -399,8 +399,10 @@ on:
     branches: [main]
 jobs:
   release:
-    uses: andrew-organization/productforge-config/.github/workflows/release.yml@v1.0.0
+    uses: andrew-organization/productforge-config/.github/workflows/release.yml@vX.Y.Z
     permissions: {contents: write, issues: write, pull-requests: write}
+    secrets:
+      PF_READ_TOKEN: ${{ secrets.PF_READ_TOKEN }}
     # with:
     #   prepare-cmd: ./scripts/write-version.sh ${nextRelease.version}   # only if a file carries the version
     #   check-cmd: ./scripts/check-release.sh                             # only for a check of its own
@@ -410,6 +412,49 @@ A merge to main releases by its pull request's title: `feat` a minor,
 `fix`, `perf`, `refactor` and `build(deps)` a patch, a `!` or
 `BREAKING CHANGE` footer a major, anything else nothing. The release is a
 git tag and its GitHub release.
+
+The caller grants all three permissions, since the workflow's job asks for them: a
+caller granting fewer does not start. It passes `PF_READ_TOKEN` by name, never
+with `secrets: inherit`; a caller that passes none is refused by the job's first
+step, naming it, before anything is released. Only this repository's own run
+needs none.
+
+### The closing section of a release's notes
+
+After a run that creates a version, the workflow adds a closing `### To take
+this release` section to that release's notes, built by
+`src/productforge_config/release_notes.py` from the commit messages the version
+holds, which are the squashed pull requests' titles and descriptions. It reads
+the module from this repository at the commit the workflow runs from
+(`job.workflow_sha`), with the read token, so a caller pinned to a release gets
+that release's reading of the section. A run is a releasing run when the newest
+stable tag sits on the commit the run is at, so a re-run of a job that failed
+after releasing still adds the section, and a run that creates no version changes
+no notes.
+
+| The version's commits | The notes end with |
+| --- | --- |
+| The version has no earlier stable release | `First release.` and nothing else, however many commits it holds |
+| One or more commits have a section | Each section, oldest commit first, under the commit's subject in bold |
+| No commit has a section, no breaking change | `Nothing to do to take this release.` |
+| No commit has a section, a breaking change | Nothing is added: the notes' breaking-change block says what changed |
+| The notes already hold the heading | Nothing is changed, so a repeat run adds nothing |
+
+A commit's section is read as follows; a commit with none contributes nothing, and
+a commit that releases nothing, such as a `docs` merge, contributes its section to
+the next release.
+
+| Form | Read as |
+| --- | --- |
+| A line of up to three spaces, one to six `#`, a space and `To take this release`, in any case, with an optional closing run of `#` and an optional trailing colon | The section's heading. Its text runs to the next heading of the same or a higher level, a line starting `BREAKING CHANGE:` or `BREAKING-CHANGE:`, or the end of the message. |
+| A deeper heading inside the section | Part of its text. |
+| The heading inside a fenced code block, opened by three backticks or three tildes | Not a heading. |
+| Text inside an HTML comment | Removed before anything is read, a comment inside a fenced block too. |
+| A section with no text left | None. |
+| A message with no heading of that title | None. |
+| A second heading of that title in the message, at the same or a higher level than the first | Ignored: the first is the commit's. |
+| An underlined heading, a bold line, or a heading with other words | Not a heading. |
+| A trailer at the message's end (`Co-authored-by:`, `Signed-off-by:`, `Reviewed-by:`, `Acked-by:`, `Tested-by:`, `Reported-by:`, `Suggested-by:`, `Helped-by:`, `Cc:` or `Claude-Session:`) or an attribution line (`🤖 Generated with`, a `https://claude.ai/code/session_` link), which a squashed commit carries | Not part of the section. Any other line stays in it. |
 
 ```makefile
 # Makefile
@@ -536,13 +581,14 @@ jobs:
     with:
       environment: release
     secrets:
+      PF_READ_TOKEN: ${{ secrets.PF_READ_TOKEN }}
       PF_RELEASE_DEPLOY_KEY: ${{ secrets.PF_RELEASE_DEPLOY_KEY }}
 ```
 
 has its job declare that environment and its checkout use the key, so every
 push of the release goes over SSH. The caller passes the secret itself: the
-called workflow doesn't read it otherwise. A caller with neither releases
-exactly as before, with the job's token.
+called workflow doesn't read it otherwise. A caller with neither input
+releases with the job's token, and still passes `PF_READ_TOKEN`.
 
 The repository holds a write deploy key, the key's private half as the secret
 `PF_RELEASE_DEPLOY_KEY` of an environment whose only deployment branch is
