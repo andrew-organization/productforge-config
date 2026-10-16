@@ -32,6 +32,11 @@ variant (see github.py) against a live repository, public or private, via
 `gh api`. `check` never writes anything; `apply` needs repository admin
 rights on the target.
 
+`productforge-config clashes <checkout> <checkout> [...] [--json]` reports each host
+port, Compose project, built image and volume that two or more checkouts would take at
+once, resolving an API's compose model without starting anything, and exits 1 when
+there is any (see clashes.py).
+
 `productforge-config usage --org ORG [--allowance MINUTES] [--from-day DAY]`
 prints one line of the month's Actions minutes against the allowance and
 exits 1 when the month is projected to reach it (see usage.py).
@@ -55,7 +60,7 @@ from typing import Any
 
 import tomllib
 
-from productforge_config import _files, github, kits, ports, scaffold, usage
+from productforge_config import _files, clashes, github, kits, ports, scaffold, usage
 from productforge_config._bundled import bundled_settings_dir as _bundled_settings_dir
 
 HOOK_SOURCE = kits.HOOK_SOURCE
@@ -641,6 +646,16 @@ def _build_parser() -> argparse.ArgumentParser:
         "--env", action="store_true", help="Print PF_PORT_<NAME>=<port> lines, as make and Docker Compose read them."
     )
 
+    clashes_parser = subparsers.add_parser(
+        "clashes",
+        help="Report each host port, Compose project, image and volume that two or more checkouts would take at "
+        "once; exit 1 when there is any, 0 when there is none.",
+    )
+    clashes_parser.add_argument(
+        "checkouts", nargs="+", metavar="checkout", help="A checkout to compare, two or more: its own path."
+    )
+    clashes_parser.add_argument("--json", action="store_true", help="Print the clashes as a JSON list.")
+
     github_parser = subparsers.add_parser(
         "github",
         help="Check or apply the GitHub repository settings and the protection variants every ProductForge "
@@ -766,6 +781,27 @@ def _main_ports(args: argparse.Namespace) -> int:
     return 0
 
 
+def _main_clashes(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    if len(args.checkouts) < 2:
+        parser.error("clashes compares two or more checkouts")
+    resolve = clashes.docker_compose_available()
+    try:
+        checkouts = [clashes.read_checkout(label=given, resolve=resolve, root=Path(given)) for given in args.checkouts]
+    except clashes.ClashError as exc:
+        print(f"productforge-config: {exc}", file=sys.stderr)
+        return 2
+    found = clashes.find_clashes(checkouts)
+    note = clashes.summary(checkouts=checkouts, resolved=resolve)
+    if args.json:
+        print(json.dumps([clash.as_json() for clash in found], indent=2))
+        print(note, file=sys.stderr)
+    else:
+        for clash in found:
+            print(clash.line())
+        print(note)
+    return 1 if found else 0
+
+
 def _add_variant_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--variant",
@@ -824,6 +860,8 @@ def main(argv: list[str] | None = None) -> int:
         return _main_init(args)
     if args.command == "ports":
         return _main_ports(args)
+    if args.command == "clashes":
+        return _main_clashes(args, parser)
     if args.command == "usage":
         return _main_usage(args)
     return _main_github(args)

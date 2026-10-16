@@ -58,8 +58,9 @@ repository is brought up to a release by one command, run in it.
   below).
 - `src/productforge_config/` — the `productforge-config update` command
   that brings a repository up to a release, `init` and `ports` for the
-  kits, and the `productforge-config github` command that checks or applies
-  `settings/github.json`.
+  kits, the `productforge-config clashes` command that finds what several
+  checkouts would take at once, and the `productforge-config github` command
+  that checks or applies `settings/github.json`.
 
 ## Bringing a repository up to a release
 
@@ -220,6 +221,51 @@ productforge-config ports --slot 3          # 6160  the API, 6161  Postgres, ...
 productforge-config ports --slot 3 --env    # PF_PORT_API=6160, PF_PORT_POSTGRES=6161, ...
 make ports                                  # the same, for this repository's own slot
 ```
+
+## Checking that products can run at once
+
+Every product takes a slot, so its ports never meet another product's; the
+Compose project, the built images and the named volumes come from the
+repository's own name. `clashes` compares what several checkouts would take,
+before any of them is started:
+
+```sh
+productforge-config clashes ../the-stack-api ../the-stack-web ../productforge-api-template ../productforge-web-template
+productforge-config clashes ../a ../b --json   # the clashes as a JSON list
+```
+
+It takes two or more checkouts, an API and a web app of one product included,
+reads each one's `productforge.env` and works out the `PF_` values its kit's
+makefile works out. For a checkout that takes `django-api` it runs
+`docker compose --env-file productforge.env -f .productforge/compose.yml
+--project-directory . config --format json` with them, adding `.env` and
+`docker-compose.local.yml` when the checkout has them, as `make up` does, so a
+port set by hand in either is seen. Nothing is started and nothing is written.
+
+| Value | Taken from | Clashes when |
+| --- | --- | --- |
+| Host port | each published port of the resolved compose model, the integration tests' Postgres port, and the web app's port | two checkouts publish the same port |
+| Compose project | `name` of the resolved model, and `<PF_NAME>-test` of the test project | two checkouts share a name |
+| Image | each service's `image` that has a `build` key | two checkouts share a name |
+| Volume | each named volume's resolved name | two checkouts share a name |
+
+A database is covered by its host port and its volume; two repositories with
+the same `PF_POSTGRES_DB` in different projects do not clash. Images pulled from
+a registry, which several projects share, are not compared.
+
+Each clash is one line, `<kind> <value>: <checkout>, <checkout>`, with the
+checkouts named as given, then one line saying what was compared and the host
+ports each checkout takes. The exit status is 0 when there is no clash and 1
+when there is any. With `--json` the clashes are printed as a list of
+`{"kind", "value", "checkouts"}` objects, and the line saying what was compared
+goes to the error output.
+
+It refuses, naming the checkout, printing nothing else and exiting 2, a checkout
+with no `productforge.env`, one whose declaration is invalid or takes no product
+kit, and one whose compose model does not resolve, such as an API not yet
+brought up to a release, which has no compose file. Without Docker on the path
+it compares host ports only, from the ports each kit uses in the slot's block,
+and says it did not resolve the compose models.
 
 ## Starting a repository: `init`
 
