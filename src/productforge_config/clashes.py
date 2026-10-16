@@ -27,8 +27,8 @@ VOLUME = "volume"
 KINDS = (PORT, PROJECT, IMAGE, VOLUME)
 
 # The ports of the slot's block each kit publishes, by the names in ports.OFFSETS. The API's are
-# what its compose files publish (the Postgres for the integration tests is in compose.test.yml,
-# which is not resolved); without Docker they are all the check has to go on.
+# what its compose files publish, the integration tests' Postgres included; without Docker they
+# are all the check has to go on.
 KIT_PORTS: dict[str, tuple[str, ...]] = {
     "django-api": ("API", "POSTGRES", "REDIS", "FLOWER", "MAILPIT_SMTP", "MAILPIT_UI", "TEST_POSTGRES"),
     "flutter-web": ("WEB",),
