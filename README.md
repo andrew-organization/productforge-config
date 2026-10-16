@@ -234,8 +234,8 @@ With no `--kind`, the declaration is the repository's own `productforge.env`
 later `update`), with `PF_NAME` and `PF_SLOT` set; no other value of the
 file is kept. A repository with no
 `productforge.env`, or whose kits name neither `django-api` nor `flutter-web`
-(both is refused as it always is), is refused naming the file, and nothing is
-written. Given `--kind`, `init` writes that kind's kits, as before.
+(both is refused), is refused naming the file, and nothing is
+written. Given `--kind`, `init` writes that kind's kits.
 
 Validates the values first, then writes `productforge.env`, the thin
 `Makefile`, and the thin `.github/workflows/ci.yml` (on every pull request and every
